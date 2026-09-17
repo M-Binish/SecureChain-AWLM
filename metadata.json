@@ -1,0 +1,6 @@
+{
+  "name": "SecureChain-AWLM",
+  "description": "A Blockchain-Based Framework for Secure and Traceable Autonomous Weapon Lifecycle Management (Academic Software Prototype)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
