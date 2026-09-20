@@ -39,7 +39,7 @@ export interface LifecycleEvent {
   isConditional?: boolean; // For incident reporting
 }
 
-export type CertificationStatus = 'Certified' | 'Pending Review' | 'Expired' | 'Revoked';
+export type CertificationStatus = 'Certified' | 'Pending Review' | 'Expired' | 'Revoked' | 'Rejected';
 
 export type OverallLifecycleStatus =
   | 'Manufacturing & Certification'

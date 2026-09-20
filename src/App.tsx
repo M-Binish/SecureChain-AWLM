@@ -276,6 +276,7 @@ export default function App() {
       <AwsDetailModal
         record={selectedAws}
         onClose={() => setSelectedAws(null)}
+        userRole={session.role}
       />
     </div>
   );

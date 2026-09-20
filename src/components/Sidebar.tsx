@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRole } from '../types';
-import { canAccessView } from '../utils/permissions';
+import { canAccessView, getRoleDashboardTitle } from '../utils/permissions';
 import {
   LayoutDashboard,
   Shield,
@@ -22,6 +22,7 @@ import {
   Eye,
   Cpu,
   GitFork,
+  HardDrive,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -114,6 +115,13 @@ const NAV_ITEMS: NavItemConfig[] = [
     badge: 'AUDIT',
   },
   {
+    id: 'admin-console',
+    title: 'System Administration Console',
+    icon: HardDrive,
+    group: 'governance',
+    badge: 'ADMIN',
+  },
+  {
     id: 'policies',
     title: 'Governance Policies',
     icon: ScrollText,
@@ -192,7 +200,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       isActive ? 'text-blue-400' : 'text-slate-400'
                     }`}
                   />
-                  <span className="truncate">{item.title}</span>
+                  <span className="truncate">
+                    {item.id === 'dashboard' ? getRoleDashboardTitle(userRole) : item.title}
+                  </span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   {item.badge && (

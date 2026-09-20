@@ -11,6 +11,7 @@ import {
 import { DataService } from '../services/dataService';
 import { PolicyEngine } from '../services/policyEngine';
 import { canPerformLifecycleOperation } from '../utils/permissions';
+import { getAuthorizedRegistryColumnKeys } from '../utils/visibilityMatrix';
 import {
   Plus,
   Filter,
@@ -55,7 +56,9 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
   const [newClassification, setNewClassification] = useState('Simulated Autonomous System - Unit');
   const [newManufacturer, setNewManufacturer] = useState('Manufacturer');
   const [newMfgDate, setNewMfgDate] = useState(new Date().toISOString().substring(0, 10));
-  const [newCertStatus, setNewCertStatus] = useState<CertificationStatus>('Certified');
+  const [newCertStatus, setNewCertStatus] = useState<CertificationStatus>(
+    userRole === 'Manufacturer' ? 'Pending Review' : 'Certified'
+  );
   const [newCertRef, setNewCertRef] = useState(`CERT-2026-00${records.length + 1}`);
   const [newNotes, setNewNotes] = useState('Enrolled in digital lifecycle registry with baseline hardware verification.');
 
@@ -299,6 +302,16 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
     },
   ];
 
+  const authorizedColumnKeys = useMemo(
+    () => getAuthorizedRegistryColumnKeys(userRole),
+    [userRole]
+  );
+
+  const visibleColumns = useMemo(
+    () => columns.filter((col) => authorizedColumnKeys.includes(col.key)),
+    [columns, authorizedColumnKeys]
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -380,9 +393,23 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
         </div>
       </div>
 
+      {/* RBAC Column Visibility Banner */}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-600">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+          <span>
+            Role-Based Column Authorization: Showing <strong>{visibleColumns.length}</strong> fields for active role <strong>{userRole}</strong>.
+            Restricted registry fields are filtered per Consortium access governance policies.
+          </span>
+        </div>
+        <span className="text-[11px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+          RBAC Matrix Active
+        </span>
+      </div>
+
       {/* Main Table with Comprehensive Filters */}
       <DataTable
-        columns={columns}
+        columns={visibleColumns}
         data={filteredRecords}
         searchPlaceholder="Search by AWS ID, system classification, manufacturer, or owner..."
         searchQuery={searchQuery}
@@ -576,14 +603,28 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
                   <label className="block font-semibold text-slate-700 mb-1">
                     Certification Status
                   </label>
-                  <select
-                    value={newCertStatus}
-                    onChange={(e) => setNewCertStatus(e.target.value as CertificationStatus)}
-                    className="w-full p-2 border border-slate-300 rounded font-medium focus:ring-1 focus:ring-slate-900"
-                  >
-                    <option value="Certified">Certified</option>
-                    <option value="Pending Review">Pending Review</option>
-                  </select>
+                  {userRole === 'Manufacturer' ? (
+                    <div>
+                      <input
+                        type="text"
+                        readOnly
+                        value="Pending Review"
+                        className="w-full p-2 border border-slate-300 rounded font-medium bg-slate-100 text-slate-700 cursor-not-allowed"
+                      />
+                      <p className="text-[11px] text-amber-800 bg-amber-50 p-1.5 rounded mt-1 border border-amber-200">
+                        Consortium Rule: Genesis assets are submitted as 'Pending Review'. Only independent Regulators can approve and certify safety covenants.
+                      </p>
+                    </div>
+                  ) : (
+                    <select
+                      value={newCertStatus}
+                      onChange={(e) => setNewCertStatus(e.target.value as CertificationStatus)}
+                      className="w-full p-2 border border-slate-300 rounded font-medium focus:ring-1 focus:ring-slate-900"
+                    >
+                      <option value="Pending Review">Pending Review</option>
+                      <option value="Certified">Certified</option>
+                    </select>
+                  )}
                 </div>
               </div>
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LifecycleEvent, LifecycleStage } from '../types';
+import { LifecycleEvent, LifecycleStage, UserRole } from '../types';
 import { StatusBadge } from './StatusBadge';
 import {
   Factory,
@@ -19,6 +19,7 @@ import {
 interface LifecycleTimelineProps {
   events: LifecycleEvent[];
   currentStatus: string;
+  userRole?: UserRole;
 }
 
 const STAGES: {
@@ -81,6 +82,7 @@ const STAGES: {
 export const LifecycleTimeline: React.FC<LifecycleTimelineProps> = ({
   events,
   currentStatus,
+  userRole,
 }) => {
   const [filterStage, setFilterStage] = useState<string>('all');
   const [selectedEventId, setSelectedEventId] = useState<string | null>(
@@ -257,7 +259,7 @@ export const LifecycleTimeline: React.FC<LifecycleTimelineProps> = ({
                     <div className="flex items-center gap-1.5">
                       <User className="w-3 h-3 text-slate-400" />
                       <span>
-                        {evt.actor} <span className="text-slate-400">({evt.actorRole})</span>
+                        Recorded By: <strong className="text-slate-700">{evt.actor}</strong> ({evt.actorRole})
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -317,9 +319,14 @@ export const LifecycleTimeline: React.FC<LifecycleTimelineProps> = ({
 
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div>
-                    <div className="text-slate-500 font-medium mb-0.5">Authorizing Actor</div>
-                    <div className="text-slate-900 font-medium">{selectedEvent.actor}</div>
-                    <div className="text-slate-500 text-[11px]">{selectedEvent.actorRole}</div>
+                    <div className="text-slate-500 font-medium mb-0.5">Authorizing Actor (Recorded By)</div>
+                    <div className="text-slate-900 font-semibold">{selectedEvent.actor}</div>
+                    <div className="text-slate-500 text-[11px]">Role: {selectedEvent.actorRole}</div>
+                    {userRole && (
+                      <div className="text-[10px] text-blue-600 font-mono mt-1">
+                        Viewing as: {userRole}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <div className="text-slate-500 font-medium mb-0.5">Recorded Timestamp</div>

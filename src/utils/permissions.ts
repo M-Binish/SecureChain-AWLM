@@ -35,13 +35,13 @@ export type LifecycleOperation =
  * to authorized stakeholder roles (Phase 3 requirements).
  */
 export const OPERATION_PERMISSIONS: Record<LifecycleOperation, UserRole[]> = {
-  manufacturing_certification: ['Manufacturer', 'Administrator'],
+  manufacturing_certification: ['Manufacturer', 'Regulator', 'Administrator'],
   ownership_transfer: ['Supply Chain Operator', 'Administrator'],
   deployment_authorization: ['Government', 'Military / Defense', 'Administrator'],
   usage_tracking: ['Military / Defense', 'Administrator'],
   audit_compliance: ['Auditor / Inspector', 'Regulator', 'Administrator'],
   incident_reporting: ['Military / Defense', 'Auditor / Inspector', 'Regulator', 'Administrator'],
-  disposal: ['Military / Defense', 'Regulator', 'Administrator'],
+  disposal: ['Military / Defense', 'Government', 'Regulator', 'Administrator'],
 };
 
 export function canPerformLifecycleOperation(role: UserRole, operation: LifecycleOperation): boolean {
@@ -87,6 +87,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'architecture',
     'consortium-stakeholders',
     'deployment-authorization',
+    'disposal',
     'audit-compliance',
     'policies',
     'transaction-history',
@@ -103,6 +104,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'policies',
     'violations',
     'incident-reporting',
+    'disposal',
     'lifecycle-analytics',
   ],
   'Auditor / Inspector': [
@@ -112,7 +114,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'architecture',
     'system-architecture',
     'consortium-stakeholders',
-    'auditor-dashboard', // ONLY Auditor / Inspector and Administrator
+    'auditor-dashboard', // DEDICATED ONLY for Auditor / Inspector
     'manufacturing-certification',
     'ownership-transfer',
     'deployment-authorization',
@@ -130,7 +132,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'traceability',
     'architecture',
     'consortium-stakeholders',
-    'auditor-dashboard', // ONLY Auditor / Inspector and Administrator
+    'admin-console', // DEDICATED System Administration Console (NOT auditor-dashboard)
     'manufacturing-certification',
     'ownership-transfer',
     'deployment-authorization',
@@ -164,6 +166,30 @@ export function canAccessView(role: UserRole, viewId: string): boolean {
 }
 
 /**
+ * Role-tailored dashboard title
+ */
+export function getRoleDashboardTitle(role: UserRole): string {
+  switch (role) {
+    case 'Manufacturer':
+      return 'Manufacturer Dashboard';
+    case 'Supply Chain Operator':
+      return 'Supply Chain Dashboard';
+    case 'Military / Defense':
+      return 'Military / Defense Dashboard';
+    case 'Government':
+      return 'Government Dashboard';
+    case 'Regulator':
+      return 'Regulator Dashboard';
+    case 'Auditor / Inspector':
+      return 'Auditor Dashboard';
+    case 'Administrator':
+      return 'Administrator Dashboard';
+    default:
+      return 'Consortium Dashboard';
+  }
+}
+
+/**
  * Human-readable friendly titles for all navigable application views
  */
 export const VIEW_TITLES: Record<string, string> = {
@@ -175,6 +201,7 @@ export const VIEW_TITLES: Record<string, string> = {
   'consortium-stakeholders': 'Consortium Stakeholders',
   'roles': 'Consortium Stakeholders',
   'auditor-dashboard': 'Auditor / Inspector Dashboard',
+  'admin-console': 'System Administration Console',
   'architecture': 'System Architecture',
   'system-architecture': 'System Architecture',
   'manufacturing-certification': 'Manufacturing & Certification',

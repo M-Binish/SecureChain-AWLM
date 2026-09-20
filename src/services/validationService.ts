@@ -109,10 +109,132 @@ export class ValidationService {
       errors.push('Initial Certification Reference is required.');
     }
 
+    // Phase 5 Section 13: Initial registration must be Pending Review, not directly Certified
+    if (payload.certificationStatus && payload.certificationStatus === 'Certified' && actorRole === 'Manufacturer') {
+      return this.fail(
+        ["Unauthorized Status: Manufacturers cannot self-certify assets directly as 'Certified'. New AWS registrations must be submitted with 'Pending Review' status for independent Regulatory covenant evaluation."],
+        {
+          policyId: 'POLICY-CERT-001',
+          violationType: 'Manufacturer Self-Certification Attempt',
+          description: `Manufacturer attempted to enroll ${payload.id || 'new unit'} directly as Certified without Regulatory review.`,
+          severity: 'High',
+        }
+      );
+    }
+
     if (errors.length > 0) {
       return this.fail(errors);
     }
 
+    return this.pass();
+  }
+
+  /**
+   * Validate Certification Review & Regulatory Signoff (Phase 5 Section 13 Requirements)
+   */
+  public static validateCertificationReview(
+    record: AwsRecord | null | undefined,
+    payload: {
+      decision: 'Approve' | 'Reject' | 'Revoke' | 'Resubmit';
+      certificationId?: string;
+      notes?: string;
+    },
+    actorRole: UserRole
+  ): ValidationResult {
+    const errors: string[] = [];
+
+    if (!record) {
+      return this.fail(['Asset Not Found: The specified AWS record does not exist.']);
+    }
+
+    // Terminal state check
+    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
+      return this.fail(
+        [`Terminal State Constraint: Decommissioned asset '${record.id}' cannot undergo certification review.`],
+        {
+          policyId: 'POLICY-DISPOSAL-001',
+          violationType: 'Action on Disposed Asset',
+          description: `Certification review attempted on decommissioned unit ${record.id}.`,
+          severity: 'High',
+        }
+      );
+    }
+
+    // Resubmission workflow: Manufacturer or Administrator resubmits from Revoked/Rejected to Pending Review
+    if (payload.decision === 'Resubmit') {
+      if (actorRole !== 'Manufacturer' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Submitter: Only 'Manufacturer' (or Administrator) can submit a re-certification request.`],
+          {
+            policyId: 'POLICY-CERT-001',
+            violationType: 'Unauthorized Certification Resubmission',
+            description: `Role '${actorRole}' attempted to resubmit certification for ${record.id}.`,
+            severity: 'Medium',
+          }
+        );
+      }
+      if (record.certificationStatus !== 'Revoked' && record.certificationStatus !== 'Rejected') {
+        errors.push(`Invalid State: Only assets with 'Revoked' or 'Rejected' certification status can be resubmitted for review (current status is '${record.certificationStatus}').`);
+      }
+      if (!payload.notes || !payload.notes.trim()) {
+        errors.push('Re-certification submission requires technical justification or corrective action notes.');
+      }
+      if (errors.length > 0) return this.fail(errors);
+      return this.pass();
+    }
+
+    // Regulatory review actions: Approve, Reject, Revoke
+    // Only Regulator or Administrator can approve, reject, or revoke certification
+    if (actorRole !== 'Regulator' && actorRole !== 'Administrator') {
+      return this.fail(
+        [`Unauthorized Authority: Role '${actorRole}' cannot approve, reject, or revoke certification. Only 'Regulator' (or Administrator) holds statutory regulatory certification authority.`],
+        {
+          policyId: 'POLICY-CERT-001',
+          violationType: 'Unauthorized Regulatory Certification Action',
+          description: `Role '${actorRole}' attempted regulatory action '${payload.decision}' on ${record.id}.`,
+          severity: 'High',
+        }
+      );
+    }
+
+    if (payload.decision === 'Approve') {
+      // Cannot approve directly from Revoked without resubmission to Pending Review
+      if (record.certificationStatus === 'Revoked') {
+        return this.fail(
+          [`Invalid Certification Transition: Asset '${record.id}' has Revoked certification. Under consortium safety rules, revoked assets must be formally resubmitted by the Manufacturer to 'Pending Review' before they can be certified. Direct transition from Revoked to Certified is prohibited.`],
+          {
+            policyId: 'POLICY-CERT-001',
+            violationType: 'Illegal Revoked to Certified Transition',
+            description: `Attempted direct approval of Revoked certification on ${record.id} without required re-certification review process.`,
+            severity: 'High',
+          }
+        );
+      }
+
+      if (!payload.certificationId || !payload.certificationId.trim()) {
+        errors.push('Regulatory Certification ID / Covenant Reference is required for approval.');
+      }
+    }
+
+    if (payload.decision === 'Revoke') {
+      if (record.certificationStatus !== 'Certified') {
+        errors.push(`Invalid State: Only 'Certified' assets can have their certification revoked (current status is '${record.certificationStatus}').`);
+      }
+      if (!payload.notes || !payload.notes.trim()) {
+        errors.push('Regulatory revocation requires documented safety covenant violation or revocation grounds.');
+      }
+    }
+
+    if (payload.decision === 'Reject') {
+      if (record.certificationStatus !== 'Pending Review') {
+        errors.push(`Invalid State: Only assets in 'Pending Review' can be rejected.`);
+      }
+      if (!payload.notes || !payload.notes.trim()) {
+        errors.push('Regulatory rejection requires non-compliance findings and technical reasons.');
+      }
+    }
+
+    if (errors.length > 0) return this.fail(errors);
     return this.pass();
   }
 

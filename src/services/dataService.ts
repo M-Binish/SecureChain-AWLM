@@ -373,6 +373,116 @@ export const DataService = {
     return { success: true, record: newRecord };
   },
 
+  /**
+   * Review Certification & Safety Covenant Decision (Phase 5 Section 13 Requirements)
+   */
+  reviewCertification(
+    awsId: string,
+    payload: {
+      decision: 'Approve' | 'Reject' | 'Revoke' | 'Resubmit';
+      certificationId?: string;
+      notes?: string;
+    },
+    actorRole: UserRole,
+    actorName: string
+  ): { success: boolean; record?: AwsRecord; error?: string } {
+    const db = loadDatabase();
+    const index = db.awsRecords.findIndex((r) => r.id === awsId);
+    if (index === -1) {
+      return { success: false, error: `AWS Asset '${awsId}' not found in registry.` };
+    }
+
+    const currentRecord = db.awsRecords[index];
+
+    // Centralized validation
+    const validation = ValidationService.validateCertificationReview(currentRecord, payload, actorRole);
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
+    }
+
+    const timestamp = getTimestamp();
+    let newCertStatus: CertificationStatus;
+    let newLifecycleStatus = currentRecord.lifecycleStatus;
+    let eventTitle: string;
+    let eventDetails: string;
+    const certId = payload.certificationId || currentRecord.certificationId;
+
+    if (payload.decision === 'Approve') {
+      newCertStatus = 'Certified';
+      newLifecycleStatus = currentRecord.lifecycleStatus === 'Manufacturing & Certification' ? 'Certified' : currentRecord.lifecycleStatus;
+      eventTitle = 'Regulatory Safety Covenant: Approved & Certified';
+      eventDetails = `Statutory safety certification granted by ${actorName} (${actorRole}). Certification ID: ${certId}. Covenant attested.`;
+    } else if (payload.decision === 'Reject') {
+      newCertStatus = 'Rejected';
+      eventTitle = 'Regulatory Safety Covenant: Rejected';
+      eventDetails = `Certification submission rejected by ${actorName} (${actorRole}). Findings: ${payload.notes || 'Non-compliant with safety baseline standards.'}`;
+    } else if (payload.decision === 'Revoke') {
+      newCertStatus = 'Revoked';
+      eventTitle = 'Regulatory Safety Covenant: Revoked';
+      eventDetails = `Safety certification revoked by ${actorName} (${actorRole}). Grounds: ${payload.notes || 'Safety covenant non-compliance.'}`;
+    } else {
+      // Resubmit
+      newCertStatus = 'Pending Review';
+      eventTitle = 'Safety Certification: Formal Re-Submission';
+      eventDetails = `Manufacturer (${actorName}) resubmitted certification request for regulatory covenant review. Notes: ${payload.notes || 'Corrective measures applied.'}`;
+    }
+
+    const newEvent: LifecycleEvent = {
+      id: generateId('EVT-CERT-REV'),
+      stage: 'Manufacturing & Certification',
+      title: eventTitle,
+      timestamp,
+      actor: actorName,
+      actorRole,
+      status: payload.decision === 'Approve' ? 'Completed' : payload.decision === 'Reject' || payload.decision === 'Revoke' ? 'Flagged' : 'Pending',
+      details: eventDetails,
+      recordIdentifier: `REC-CERT-${payload.decision.toUpperCase()}-${awsId.replace('AWS-', '')}`,
+      notes: payload.notes,
+    };
+
+    const updatedRecord: AwsRecord = {
+      ...currentRecord,
+      certificationId: certId,
+      certificationStatus: newCertStatus,
+      lifecycleStatus: newLifecycleStatus,
+      lastUpdated: timestamp,
+      lifecycleHistory: [...currentRecord.lifecycleHistory, newEvent],
+    };
+
+    // Re-evaluate compliance with PolicyEngine
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
+    updatedRecord.violationCount = report.failedCount;
+
+    const newTx: LifecycleTransaction = {
+      id: generateId('TX-CERT-REV'),
+      awsId,
+      operation: `Safety Certification Decision: ${payload.decision}`,
+      stakeholder: actorName,
+      stakeholderRole: actorRole,
+      status: payload.decision === 'Approve' ? 'Completed' : payload.decision === 'Resubmit' ? 'Pending Review' : 'Flagged',
+      timestamp,
+      transactionRef: `LOG-CERT-${Date.now().toString().slice(-6)}`,
+    };
+
+    db.awsRecords[index] = updatedRecord;
+    db.transactions.unshift(newTx);
+    saveDatabase(db);
+
+    return { success: true, record: updatedRecord };
+  },
+
   // =========================================================================
   // 2. OWNERSHIP TRANSFER (PHASE 4 SECTION 1 REQUIREMENTS)
   // =========================================================================
