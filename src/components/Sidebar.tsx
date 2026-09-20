@@ -36,12 +36,12 @@ interface NavItemConfig {
   id: string;
   title: string;
   icon: React.ComponentType<{ className?: string }>;
-  group: 'main' | 'audit' | 'lifecycle' | 'governance' | 'analytics' | 'history' | 'administration';
+  group: 'main' | 'lifecycle' | 'governance';
   badge?: string;
 }
 
 const NAV_ITEMS: NavItemConfig[] = [
-  // Primary Navigation (Required in Part D)
+  // Main
   {
     id: 'dashboard',
     title: 'Dashboard',
@@ -50,42 +50,15 @@ const NAV_ITEMS: NavItemConfig[] = [
   },
   {
     id: 'aws-registry',
-    title: 'AWS Digital Registry',
+    title: 'AWS Registry',
     icon: Shield,
     group: 'main',
   },
-  {
-    id: 'traceability',
-    title: 'Lifecycle Traceability',
-    icon: GitFork,
-    group: 'main',
-  },
-  {
-    id: 'consortium-stakeholders',
-    title: 'Consortium Stakeholders',
-    icon: Users,
-    group: 'main',
-  },
-  {
-    id: 'architecture',
-    title: 'System Architecture',
-    icon: Cpu,
-    group: 'main',
-  },
 
-  // Dedicated Auditor / Inspector Dashboard (ONLY Auditor / Inspector and Administrator)
-  {
-    id: 'auditor-dashboard',
-    title: 'Auditor / Inspector Dashboard',
-    icon: Scale,
-    group: 'audit',
-    badge: 'OVERSIGHT',
-  },
-
-  // Authorized Lifecycle Modules
+  // Lifecycle Management (7 Stages strictly matched)
   {
     id: 'manufacturing-certification',
-    title: 'Manufacturing & Cert.',
+    title: 'Manufacturing & Certification',
     icon: FileCheck2,
     group: 'lifecycle',
   },
@@ -121,45 +94,49 @@ const NAV_ITEMS: NavItemConfig[] = [
   },
   {
     id: 'disposal',
-    title: 'Disposal Protocol',
+    title: 'Disposal',
     icon: Trash2,
     group: 'lifecycle',
   },
 
-  // Governance & Policies
+  // Governance & System
+  {
+    id: 'system-architecture',
+    title: 'System Architecture',
+    icon: Cpu,
+    group: 'governance',
+  },
+  {
+    id: 'auditor-dashboard',
+    title: 'Auditor / Inspector Dashboard',
+    icon: Scale,
+    group: 'governance',
+    badge: 'AUDIT',
+  },
   {
     id: 'policies',
-    title: 'Policies',
+    title: 'Governance Policies',
     icon: ScrollText,
     group: 'governance',
   },
   {
     id: 'violations',
-    title: 'Violations Log',
+    title: 'Policy Violations',
     icon: AlertOctagon,
     group: 'governance',
+    badge: 'ENGINE',
   },
-
-  // Analytics & History
   {
     id: 'lifecycle-analytics',
-    title: 'Lifecycle Analytics',
+    title: 'Compliance Analytics',
     icon: BarChart3,
-    group: 'analytics',
+    group: 'governance',
   },
   {
     id: 'transaction-history',
     title: 'Lifecycle Transaction History',
     icon: History,
-    group: 'history',
-  },
-
-  // Admin Management
-  {
-    id: 'users-roles',
-    title: 'Role Management',
-    icon: Users,
-    group: 'administration',
+    group: 'governance',
   },
 ];
 
@@ -174,12 +151,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const permittedItems = NAV_ITEMS.filter((item) => canAccessView(userRole, item.id));
 
   const mainItems = permittedItems.filter((i) => i.group === 'main');
-  const auditItems = permittedItems.filter((i) => i.group === 'audit');
   const lifecycleItems = permittedItems.filter((i) => i.group === 'lifecycle');
   const governanceItems = permittedItems.filter((i) => i.group === 'governance');
-  const analyticsItems = permittedItems.filter((i) => i.group === 'analytics');
-  const historyItems = permittedItems.filter((i) => i.group === 'history');
-  const adminItems = permittedItems.filter((i) => i.group === 'administration');
 
   const totalHiddenItems = NAV_ITEMS.length - permittedItems.length;
 
@@ -194,7 +167,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="space-y-0.5">
           {items.map((item) => {
             const Icon = item.icon;
-            const isActive = currentView === item.id;
+            const isActive =
+              currentView === item.id ||
+              (item.id === 'system-architecture' && currentView === 'architecture') ||
+              (item.id === 'aws-registry' && currentView === 'registry');
 
             return (
               <button
@@ -265,15 +241,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Navigation List */}
+        {/* Navigation List strictly organized */}
         <div className="flex-1 overflow-y-auto px-2 py-4 space-y-1">
-          {renderNavGroup('Core Navigation', mainItems)}
-          {renderNavGroup('Auditor / Oversight', auditItems)}
-          {renderNavGroup('Authorized Lifecycle Stages', lifecycleItems)}
-          {renderNavGroup('Governance & Policy', governanceItems)}
-          {renderNavGroup('Analytics', analyticsItems)}
-          {renderNavGroup('Transaction Records', historyItems)}
-          {renderNavGroup('Administration', adminItems)}
+          {renderNavGroup('Main', mainItems)}
+          {renderNavGroup('Lifecycle Management', lifecycleItems)}
+          {renderNavGroup('Governance & System', governanceItems)}
         </div>
 
         {/* Role Access Indicator Footer */}
@@ -293,7 +265,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </div>
           <div className="mt-2 text-[10px] text-slate-500">
-            Phase 3: Role-based access control & digital lifecycle records
+            Role-based access control & digital lifecycle records
           </div>
         </div>
       </aside>

@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { DashboardCard } from '../components/DashboardCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { LifecycleTimeline } from '../components/LifecycleTimeline';
 import { AwsRecord, LifecycleTransaction, UserRole } from '../types';
+import { DataService } from '../services/dataService';
+import { PolicyEngine } from '../services/policyEngine';
 import {
-  DEMO_VIOLATIONS,
-  DEMO_INCIDENTS,
   DEMO_AUDIT_RECORDS,
 } from '../data/mockData';
 import {
@@ -46,6 +46,14 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
 
   const activeAwsRecord =
     awsRecords.find((r) => r.id === selectedAwsId) || awsRecords[0];
+
+  const violations = useMemo(() => DataService.getViolations(), [awsRecords]);
+  const incidents = useMemo(() => DataService.getIncidentRecords(), [awsRecords]);
+
+  const activePolicyReport = useMemo(() => {
+    if (!activeAwsRecord) return null;
+    return PolicyEngine.evaluateAwsRecord(activeAwsRecord);
+  }, [activeAwsRecord]);
 
   // Helper to determine stage indicator for matrix
   const getStageIndicator = (record: AwsRecord, stageName: string) => {
@@ -132,7 +140,7 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
               Authorized Read-Only Inspection Console
             </h4>
             <p className="text-xs text-slate-300 mt-0.5 max-w-3xl">
-              The Auditor / Inspector role possesses comprehensive read visibility into all 7 lifecycle governance stages. All records below are simulated demo data. Compliance calculation is maintained as a neutral status pending Phase 3 policy engine implementation.
+              The Auditor / Inspector role possesses comprehensive read visibility into all 7 lifecycle governance stages. All records below are simulated demo data. Compliance calculation is maintained as a neutral status pending formal regulatory policy rules.
             </p>
           </div>
         </div>
@@ -159,17 +167,17 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
         />
         <DashboardCard
           title="Open Incidents"
-          value={DEMO_INCIDENTS.filter((i) => i.status !== 'Closed').length}
+          value={incidents.filter((i) => i.status !== 'Closed').length}
           subtitle="Safety anomaly reports"
           icon={AlertTriangle}
-          alert={DEMO_INCIDENTS.some((i) => i.status !== 'Closed')}
+          alert={incidents.some((i) => i.status !== 'Closed')}
         />
         <DashboardCard
           title="Detected Violations"
-          value={DEMO_VIOLATIONS.filter((v) => v.status !== 'Resolved').length}
+          value={violations.filter((v) => v.status !== 'Resolved').length}
           subtitle="Policy infractions open"
           icon={AlertOctagon}
-          alert={DEMO_VIOLATIONS.some((v) => v.status !== 'Resolved')}
+          alert={violations.some((v) => v.status !== 'Resolved')}
         />
         <DashboardCard
           title="Lifecycle Transactions"
@@ -406,38 +414,54 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-slate-700" />
-                <span>4. Compliance Status</span>
+                <span>4. Compliance Status ({activeAwsRecord.id})</span>
               </h3>
-              <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-mono border border-slate-200">
-                NEUTRAL BASELINE
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded font-bold border ${
+                  activePolicyReport?.derivedStatus === 'Compliant'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                    : activePolicyReport?.derivedStatus === 'Requires Review'
+                    ? 'bg-amber-50 text-amber-800 border-amber-300'
+                    : activePolicyReport?.derivedStatus === 'Non-Compliant'
+                    ? 'bg-rose-50 text-rose-800 border-rose-300'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'
+                }`}
+              >
+                {activePolicyReport?.derivedStatus || 'PENDING'}
               </span>
             </div>
             <div className="mt-4 space-y-3">
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
                 <div className="text-xs text-slate-500 font-medium">
-                  Current Evaluation Rating:
+                  Deterministic Policy Evaluation:
                 </div>
                 <div className="text-base font-bold text-slate-900 mt-1">
-                  Pending / Not Evaluated
+                  {activePolicyReport?.derivedStatus || 'Pending Evaluation'}
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Per academic prototype Phase 2 specifications, arbitrary numerical compliance ratings are not calculated. Automated compliance evaluation is deferred to the Phase 3 policy engine.
+                  Evaluated across {activePolicyReport?.evaluations.length || 0} predefined governance policy rules. No arbitrary scoring.
                 </p>
               </div>
 
-              <div className="space-y-2 text-xs text-slate-700">
-                <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                  <span className="text-slate-500">Autonomous Safety Covenant:</span>
-                  <span className="font-semibold text-slate-800">Pending Evaluation</span>
-                </div>
-                <div className="flex items-center justify-between py-1 border-b border-slate-100">
-                  <span className="text-slate-500">Geofencing Constraints:</span>
-                  <span className="font-semibold text-slate-800">Pending Evaluation</span>
-                </div>
-                <div className="flex items-center justify-between py-1">
-                  <span className="text-slate-500">Override Response Latency:</span>
-                  <span className="font-semibold text-slate-800">Pending Evaluation</span>
-                </div>
+              <div className="space-y-1.5 text-xs text-slate-700 max-h-48 overflow-y-auto pr-1">
+                {activePolicyReport?.evaluations.slice(0, 5).map((ev) => (
+                  <div key={ev.policyId} className="flex items-center justify-between py-1 border-b border-slate-100">
+                    <span className="text-slate-600 truncate max-w-[200px]" title={ev.policyName}>
+                      {ev.policyId}: {ev.policyName}
+                    </span>
+                    <span
+                      className={`font-semibold px-1.5 py-0.2 rounded text-[10px] ${
+                        ev.result === 'PASS'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : ev.result === 'REVIEW'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-rose-100 text-rose-800'
+                      }`}
+                    >
+                      {ev.result}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -445,7 +469,7 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
           <div className="p-2.5 bg-blue-50/70 border border-blue-200 rounded text-[11px] text-blue-900 flex items-start gap-2">
             <Info className="w-3.5 h-3.5 text-blue-700 shrink-0 mt-0.5" />
             <span>
-              Auditors review raw telemetry handshakes directly to verify that human-in-the-loop overrides were maintained.
+              Auditors review verifiable state transitions and rule proofs directly to confirm statutory compliance.
             </span>
           </div>
         </div>
@@ -466,12 +490,12 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
               </p>
             </div>
             <span className="text-xs px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 rounded font-semibold">
-              {DEMO_VIOLATIONS.length} Logged
+              {violations.length} Logged
             </span>
           </div>
 
-          <div className="divide-y divide-slate-200">
-            {DEMO_VIOLATIONS.map((vio) => (
+          <div className="divide-y divide-slate-200 max-h-96 overflow-y-auto">
+            {violations.map((vio) => (
               <div key={vio.id} className="p-4 hover:bg-slate-50 text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -491,13 +515,13 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
                   </div>
                   <span className="font-semibold text-slate-700">{vio.status}</span>
                 </div>
-                <div className="font-semibold text-slate-800">{vio.policyName}</div>
+                <div className="font-semibold text-slate-800">{vio.violationType}</div>
                 <p className="text-slate-600 text-[11px] leading-relaxed">
                   {vio.description}
                 </p>
                 <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1">
                   <span>Detected: {vio.detectedDate}</span>
-                  <span>Investigating Role: {vio.investigatingRole}</span>
+                  <span>Trigger: {vio.triggeredBy}</span>
                 </div>
               </div>
             ))}
@@ -517,12 +541,12 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
               </p>
             </div>
             <span className="text-xs px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded font-semibold">
-              {DEMO_INCIDENTS.length} Logged
+              {incidents.length} Logged
             </span>
           </div>
 
-          <div className="divide-y divide-slate-200">
-            {DEMO_INCIDENTS.map((inc) => (
+          <div className="divide-y divide-slate-200 max-h-96 overflow-y-auto">
+            {incidents.map((inc) => (
               <div key={inc.id} className="p-4 hover:bg-slate-50 text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -611,7 +635,7 @@ export const AuditorDashboardPage: React.FC<AuditorDashboardPageProps> = ({
         </div>
 
         <div className="p-3 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex items-center justify-between">
-          <span>Demo data only. Cryptographic smart contracts will be implemented in subsequent phases.</span>
+          <span>Application-level lifecycle audit records stored in local application state.</span>
           <span className="font-mono text-slate-400">READ-ONLY AUDIT CONSOLE</span>
         </div>
       </div>

@@ -382,7 +382,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   Pending / Not Evaluated
                 </div>
                 <div className="text-[11px] text-slate-500 mt-1">
-                  Policy engine evaluation in Phase 3
+                  Regulatory policy engine evaluation
                 </div>
               </div>
               <DashboardCard
@@ -491,7 +491,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
           <div>
             <h4 className="text-sm font-semibold text-white">
-              Phase 2 Role-Based Access Control Prototype
+              Role-Based Access Control Prototype
             </h4>
             <p className="text-xs text-slate-300 mt-0.5 max-w-3xl">
               This academic software prototype tracks digital lifecycle records for simulated Autonomous Weapon Systems. Demo authentication is active with session persistence. Real weapons and live blockchain networks are strictly out-of-scope.
@@ -663,7 +663,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
 
         <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500">
-          <span>Demo data only. Smart contract execution will be implemented in subsequent phases.</span>
+          <span>Application-level lifecycle audit records stored in local application state.</span>
           <span className="font-mono text-[11px]">IMMUTABILITY SIMULATION</span>
         </div>
       </div>

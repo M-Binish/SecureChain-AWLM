@@ -658,7 +658,7 @@ export const PlaceholderPage: React.FC<PlaceholderPageProps> = ({
             <strong className="font-semibold">Role-Based Selective Access Notice:</strong> Your current active role (
             <strong>{userRole}</strong>) does not normally access this module under standard consortium operational rules.
             <div className="text-amber-800 mt-1">
-              Permitted Roles: {config.allowedRoles.join(', ')}. Use the top header switcher to switch roles for testing.
+              Permitted Roles: {config.allowedRoles.join(', ')}. To access with an authorized role, log out and sign in with appropriate credentials.
             </div>
           </div>
         </div>

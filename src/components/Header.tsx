@@ -1,14 +1,12 @@
 import React from 'react';
 import { UserRole } from '../types';
-import { DEMO_ROLES } from '../data/mockData';
-import { Menu, LogOut, ShieldAlert, User, ChevronDown } from 'lucide-react';
+import { Menu, LogOut, ShieldAlert, User, Shield } from 'lucide-react';
 
 interface HeaderProps {
   currentViewTitle: string;
   activeRole: UserRole;
   username: string;
   organization: string;
-  onRoleChange: (newRole: UserRole) => void;
   onLogout: () => void;
   onToggleMobileMenu: () => void;
 }
@@ -18,7 +16,6 @@ export const Header: React.FC<HeaderProps> = ({
   activeRole,
   username,
   organization,
-  onRoleChange,
   onLogout,
   onToggleMobileMenu,
 }) => {
@@ -51,39 +48,19 @@ export const Header: React.FC<HeaderProps> = ({
           <span>Academic Prototype • Software Simulation Only</span>
         </div>
 
-        {/* Right Side: Role Switcher & User Session */}
+        {/* Right Side: Read-Only Stakeholder Identity Display & Logout */}
         <div className="flex items-center gap-3">
-          {/* Quick Demo Role Switcher */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 hidden xl:inline">Switch Role:</span>
-            <div className="relative inline-block">
-              <select
-                value={activeRole}
-                onChange={(e) => onRoleChange(e.target.value as UserRole)}
-                className="appearance-none bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-md py-1.5 pl-3 pr-8 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-800 cursor-pointer shadow-xs"
-                title="Change active demo role to inspect role-specific navigation"
-              >
-                {DEMO_ROLES.map((r) => (
-                  <option key={r.role} value={r.role}>
-                    Role: {r.role}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          {/* Read-Only Authenticated Session Badge */}
+          <div className="flex items-center gap-2.5 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-left select-none">
+            <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shrink-0">
+              <User className="w-4 h-4 text-blue-400" />
             </div>
-          </div>
-
-          {/* User Profile Info */}
-          <div className="hidden sm:flex items-center gap-2.5 pl-2 border-l border-slate-200">
-            <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold">
-              <User className="w-4 h-4" />
-            </div>
-            <div className="text-left text-xs">
-              <div className="font-semibold text-slate-900 leading-tight truncate max-w-[120px]">
-                {username}
+            <div className="text-xs leading-tight min-w-0">
+              <div className="text-[11px] text-slate-500 truncate">
+                Signed in as: <span className="font-semibold text-slate-900">{username}</span>
               </div>
-              <div className="text-[10px] text-slate-500 leading-tight truncate max-w-[120px]">
-                {organization}
+              <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+                Role: <span className="font-bold text-slate-900">{activeRole}</span>
               </div>
             </div>
           </div>
@@ -92,11 +69,12 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={onLogout}
-            className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer border border-transparent hover:border-rose-200"
-            title="Log out of session"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 hover:text-rose-700 bg-white hover:bg-rose-50 border border-slate-300 hover:border-rose-300 rounded-lg transition-colors cursor-pointer shadow-xs"
+            title="Log out of current stakeholder session"
             aria-label="Log out"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Logout</span>
           </button>
         </div>
       </div>

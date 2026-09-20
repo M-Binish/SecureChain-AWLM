@@ -71,6 +71,19 @@ export interface DemoUser {
   organization: string;
 }
 
+export interface OwnershipTransferRecord {
+  id: string;
+  awsId: string;
+  previousOwner: string;
+  newOwner: string;
+  transferDate: string;
+  transferStatus: 'Completed' | 'In Progress' | 'Flagged' | 'Rejected';
+  recordedBy: string;
+  recordedByRole: UserRole;
+  reason: string;
+  notes?: string;
+}
+
 export interface AwsRecord {
   id: string;
   systemName: string;
@@ -88,20 +101,47 @@ export interface AwsRecord {
   createdTimestamp: string;
   lastUpdated: string;
   systemType: string;
-  complianceStatus: string;
+  complianceStatus: 'Compliant' | 'Non-Compliant' | 'Pending' | 'Requires Review' | string;
+  violationCount?: number;
   notes?: string;
   lifecycleHistory: LifecycleEvent[];
+  ownershipHistory: OwnershipTransferRecord[];
 }
 
 export interface ViolationRecord {
   id: string;
   awsId: string;
-  policyName: string;
+  policyId: string;
+  violationType: string;
   severity: 'High' | 'Medium' | 'Low';
   description: string;
   detectedDate: string;
-  status: 'Open' | 'Under Investigation' | 'Resolved';
-  investigatingRole: UserRole;
+  detectedBy: string;
+  triggeredBy: string;
+  role: UserRole;
+  status: 'Open' | 'Under Review' | 'Resolved';
+  resolutionNotes?: string;
+  relatedIncidentId?: string;
+}
+
+export type PolicyEvaluationResultStatus = 'PASS' | 'FAIL' | 'REVIEW';
+
+export interface PolicyRule {
+  policyId: string;
+  name: string;
+  category: 'Certification' | 'Ownership' | 'Deployment' | 'Usage' | 'Disposal' | 'Audit' | 'Incident' | 'Identity';
+  description: string;
+  condition: string;
+  status: 'Active' | 'Under Review' | 'Deprecated';
+}
+
+export interface PolicyEvaluation {
+  policyId: string;
+  policyName: string;
+  category: string;
+  result: PolicyEvaluationResultStatus;
+  details: string;
+  evaluatedAt: string;
 }
 
 export interface IncidentRecord {

@@ -331,7 +331,7 @@ export const LifecycleTimeline: React.FC<LifecycleTimelineProps> = ({
                   <div className="flex items-start gap-2 text-slate-500 bg-slate-50 p-2.5 rounded border border-slate-200 text-[11px] leading-relaxed">
                     <Info className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
                     <div>
-                      <strong className="text-slate-700">Digital Record Traceability:</strong> Application-level lifecycle audit record. Blockchain ledger and smart contract integration will be introduced in Phase 5.
+                      <strong className="text-slate-700">Digital Record Traceability:</strong> Application-level lifecycle audit record stored in local application state.
                     </div>
                   </div>
                 </div>

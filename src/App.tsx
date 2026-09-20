@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole, UserSession, AwsRecord } from './types';
 import { DEMO_STATS } from './data/mockData';
-import { getStoredSession, clearDemoSession, createSessionForRole } from './utils/auth';
+import { getStoredSession, clearDemoSession } from './utils/auth';
 import { canAccessView, VIEW_TITLES } from './utils/permissions';
 import { DataService } from './services/dataService';
 import { LoginPage } from './pages/LoginPage';
@@ -9,6 +9,10 @@ import { DashboardPage } from './pages/DashboardPage';
 import { RegistryPage } from './pages/RegistryPage';
 import { AuditorDashboardPage } from './pages/AuditorDashboardPage';
 import { LifecycleOperationsPage } from './pages/LifecycleOperationsPage';
+import { SystemArchitecturePage } from './pages/SystemArchitecturePage';
+import { PoliciesPage } from './pages/PoliciesPage';
+import { ViolationsPage } from './pages/ViolationsPage';
+import { LifecycleAnalyticsPage } from './pages/LifecycleAnalyticsPage';
 import { AccessRestrictedPage } from './pages/AccessRestrictedPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
 import { Sidebar } from './components/Sidebar';
@@ -41,17 +45,40 @@ export default function App() {
   });
 
   // Navigation State
-  const [currentView, setCurrentView] = useState<string>('dashboard');
+  const [currentView, setCurrentView] = useState<string>(() => {
+    const initialHash = window.location.hash.replace(/^#\/?/, '');
+    return initialHash || 'dashboard';
+  });
   const [isMobileNavOpen, setIsMobileNavOpen] = useState<boolean>(false);
 
   // Persistent Application Data Layer State
   const [awsRecords, setAwsRecords] = useState<AwsRecord[]>(() => DataService.getAwsRecords());
+  const [violations, setViolations] = useState(() => DataService.getViolations());
   const [selectedAws, setSelectedAws] = useState<AwsRecord | null>(null);
+
+  // Synchronize hash routing with currentView state for direct URL support & RBAC protection
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace(/^#\/?/, '');
+      if (hash && hash !== currentView) {
+        setCurrentView(hash);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [currentView]);
+
+  const handleNavigate = (viewId: string) => {
+    window.location.hash = viewId;
+    setCurrentView(viewId);
+    setIsMobileNavOpen(false);
+  };
 
   // Sync state whenever view changes or on mount
   const refreshData = () => {
     const latest = DataService.getAwsRecords();
     setAwsRecords(latest);
+    setViolations(DataService.getViolations());
     if (selectedAws) {
       const refreshedSelected = latest.find((r) => r.id === selectedAws.id);
       if (refreshedSelected) {
@@ -63,7 +90,7 @@ export default function App() {
   // Handle Login
   const handleLogin = (newSession: UserSession) => {
     setSession(newSession);
-    setCurrentView('dashboard');
+    handleNavigate('dashboard');
     refreshData();
   };
 
@@ -76,14 +103,8 @@ export default function App() {
       organization: 'Auditor / Inspector',
       isAuthenticated: false,
     });
-    setCurrentView('dashboard');
+    handleNavigate('dashboard');
     setSelectedAws(null);
-  };
-
-  // Handle Role Change (from top header dropdown for rapid demo testing)
-  const handleRoleChange = (newRole: UserRole) => {
-    const updatedSession = createSessionForRole(newRole, session.username || 'auditor');
-    setSession(updatedSession);
   };
 
   // Callback when a lifecycle operation or new AWS registration updates data
@@ -104,7 +125,7 @@ export default function App() {
     return <LoginPage onLogin={handleLogin} />;
   }
 
-  // Check if current view is permitted for the active role (Part D & E: Role Guard)
+  // Check if current view is permitted for the active role (Role Guard: applies to direct URL access too)
   const isPermitted = canAccessView(session.role, currentView);
 
   const transactions = DataService.getTransactions();
@@ -114,7 +135,7 @@ export default function App() {
       {/* Sidebar Navigation */}
       <Sidebar
         currentView={currentView}
-        onNavigate={(viewId) => setCurrentView(viewId)}
+        onNavigate={handleNavigate}
         userRole={session.role}
         isMobileOpen={isMobileNavOpen}
         onCloseMobile={() => setIsMobileNavOpen(false)}
@@ -128,7 +149,6 @@ export default function App() {
           activeRole={session.role}
           username={session.username}
           organization={session.organization}
-          onRoleChange={handleRoleChange}
           onLogout={handleLogout}
           onToggleMobileMenu={() => setIsMobileNavOpen(!isMobileNavOpen)}
         />
@@ -140,7 +160,7 @@ export default function App() {
             <AccessRestrictedPage
               currentRole={session.role}
               attemptedView={getViewTitle()}
-              onReturnToDashboard={() => setCurrentView('dashboard')}
+              onReturnToDashboard={() => handleNavigate('dashboard')}
             />
           ) : (
             <>
@@ -151,7 +171,7 @@ export default function App() {
                   transactions={transactions}
                   userRole={session.role}
                   onSelectAws={(record) => setSelectedAws(record)}
-                  onNavigateToView={(view) => setCurrentView(view)}
+                  onNavigateToView={handleNavigate}
                 />
               )}
 
@@ -164,12 +184,47 @@ export default function App() {
                 />
               )}
 
+              {(currentView === 'system-architecture' || currentView === 'architecture') && (
+                <SystemArchitecturePage />
+              )}
+
               {currentView === 'auditor-dashboard' && (
                 <AuditorDashboardPage
                   awsRecords={awsRecords}
                   transactions={transactions}
                   userRole={session.role}
                   onSelectAws={(record) => setSelectedAws(record)}
+                />
+              )}
+
+              {currentView === 'policies' && (
+                <PoliciesPage
+                  awsRecords={awsRecords}
+                  userRole={session.role}
+                  onSelectAws={(record) => setSelectedAws(record)}
+                  onNavigateToViolations={() => handleNavigate('violations')}
+                />
+              )}
+
+              {currentView === 'violations' && (
+                <ViolationsPage
+                  violations={violations}
+                  awsRecords={awsRecords}
+                  userRole={session.role}
+                  onSelectAws={(record) => setSelectedAws(record)}
+                  onViolationUpdated={refreshData}
+                  onNavigateToIncidents={() => handleNavigate('incident-reporting')}
+                />
+              )}
+
+              {currentView === 'lifecycle-analytics' && (
+                <LifecycleAnalyticsPage
+                  awsRecords={awsRecords}
+                  violations={violations}
+                  userRole={session.role}
+                  onSelectAws={(record) => setSelectedAws(record)}
+                  onNavigateToViolations={() => handleNavigate('violations')}
+                  onNavigateToPolicies={() => handleNavigate('policies')}
                 />
               )}
 
@@ -180,19 +235,24 @@ export default function App() {
                   awsRecords={awsRecords}
                   onSelectAws={(record) => setSelectedAws(record)}
                   onRecordUpdated={handleRecordUpdated}
-                  onNavigate={(viewId) => setCurrentView(viewId)}
+                  onNavigate={handleNavigate}
                 />
               )}
 
               {currentView !== 'dashboard' &&
                 currentView !== 'aws-registry' &&
                 currentView !== 'registry' &&
+                currentView !== 'system-architecture' &&
+                currentView !== 'architecture' &&
                 currentView !== 'auditor-dashboard' &&
+                currentView !== 'policies' &&
+                currentView !== 'violations' &&
+                currentView !== 'lifecycle-analytics' &&
                 !LIFECYCLE_STAGE_VIEWS.includes(currentView) && (
                   <PlaceholderPage
                     viewId={currentView}
                     userRole={session.role}
-                    onNavigateBack={() => setCurrentView('dashboard')}
+                    onNavigateBack={() => handleNavigate('dashboard')}
                   />
                 )}
             </>
@@ -202,7 +262,7 @@ export default function App() {
         {/* Global Footer */}
         <footer className="bg-white border-t border-slate-200 py-3 px-6 text-xs text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>
-            <strong>SecureChain-AWLM</strong> — B.Tech Major Project • Department of Computer Science & Engineering (Phase 3)
+            <strong>SecureChain-AWLM</strong> — B.Tech Major Project • Department of Computer Science & Engineering
           </div>
           <div className="flex items-center gap-4 text-slate-400">
             <span>IEEE Autonomous Systems Governance Model</span>

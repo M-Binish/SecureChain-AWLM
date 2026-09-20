@@ -9,6 +9,7 @@ import {
   OverallLifecycleStatus,
 } from '../types';
 import { DataService } from '../services/dataService';
+import { PolicyEngine } from '../services/policyEngine';
 import { canPerformLifecycleOperation } from '../utils/permissions';
 import {
   Plus,
@@ -22,6 +23,7 @@ import {
   FileCheck2,
   AlertOctagon,
   CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface RegistryPageProps {
@@ -43,6 +45,7 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
   const [ownerFilter, setOwnerFilter] = useState('All');
   const [certFilter, setCertFilter] = useState('All');
   const [deploymentFilter, setDeploymentFilter] = useState('All');
+  const [complianceFilter, setComplianceFilter] = useState('All');
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerSuccess, setRegisterSuccess] = useState<string | null>(null);
@@ -67,6 +70,16 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
     const set = new Set<string>();
     records.forEach((r) => r.currentOwner && set.add(r.currentOwner));
     return Array.from(set);
+  }, [records]);
+
+  // Pre-calculate compliance map
+  const complianceMap = useMemo(() => {
+    const map = new Map<string, string>();
+    records.forEach((r) => {
+      const evaluation = PolicyEngine.evaluateAwsRecord(r);
+      map.set(r.id, evaluation.overallCompliance);
+    });
+    return map;
   }, [records]);
 
   // Filter logic
@@ -96,13 +109,18 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
         deploymentFilter === 'All' ||
         r.deploymentAuthorizationStatus === deploymentFilter;
 
+      const recordCompliance = r.complianceStatus || complianceMap.get(r.id) || 'Compliant';
+      const matchesCompliance =
+        complianceFilter === 'All' || recordCompliance === complianceFilter;
+
       return (
         matchesSearch &&
         matchesLifecycle &&
         matchesManufacturer &&
         matchesOwner &&
         matchesCert &&
-        matchesDeployment
+        matchesDeployment &&
+        matchesCompliance
       );
     });
   }, [
@@ -113,6 +131,8 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
     ownerFilter,
     certFilter,
     deploymentFilter,
+    complianceFilter,
+    complianceMap,
   ]);
 
   // Summary Metrics calculations
@@ -220,6 +240,39 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
       key: 'incidentStatus',
       header: 'Incidents',
       render: (r) => <StatusBadge status={r.incidentStatus} size="sm" />,
+    },
+    {
+      key: 'complianceStatus',
+      header: 'Policy Compliance',
+      render: (r) => {
+        const compliance = r.complianceStatus || complianceMap.get(r.id) || 'Compliant';
+        const hasOpenViolations = Boolean(r.violationCount && r.violationCount > 0);
+        return (
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                compliance === 'Compliant'
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  : compliance === 'Requires Review'
+                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                  : compliance === 'Non-Compliant'
+                  ? 'bg-rose-50 text-rose-800 border-rose-200'
+                  : 'bg-slate-100 text-slate-700 border-slate-200'
+              }`}
+            >
+              {compliance}
+            </span>
+            {hasOpenViolations && (
+              <span
+                className="text-[10px] bg-rose-100 text-rose-700 px-1 py-0.2 rounded font-bold"
+                title={`${r.violationCount} open violation(s)`}
+              >
+                !
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'lastUpdated',
@@ -385,6 +438,19 @@ export const RegistryPage: React.FC<RegistryPageProps> = ({
               <option value="Expired">Expired</option>
               <option value="Revoked">Revoked</option>
               <option value="Not Applicable">Not Applicable</option>
+            </select>
+
+            {/* Compliance Filter */}
+            <select
+              value={complianceFilter}
+              onChange={(e) => setComplianceFilter(e.target.value)}
+              className="bg-white border border-slate-300 rounded px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900 cursor-pointer font-medium"
+            >
+              <option value="All">All Compliance</option>
+              <option value="Compliant">Compliant</option>
+              <option value="Requires Review">Requires Review</option>
+              <option value="Non-Compliant">Non-Compliant</option>
+              <option value="Pending Baseline">Pending Baseline</option>
             </select>
 
             {/* Manufacturer Filter */}

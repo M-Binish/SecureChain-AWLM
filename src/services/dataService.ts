@@ -4,13 +4,16 @@
  * APPLICATION DATA LAYER & PERSISTENT STORAGE
  * 
  * Architecture:
- * UI Components -> Application / API Data Layer (this service) -> Persistent Storage
+ * UI Components -> Application / API Layer (DataService) -> Validation Layer (ValidationService)
+ * -> Policy / Compliance Engine (PolicyEngine) -> Local Persistent Storage
  * 
  * Enforces business rules:
  * - Role-based authorization for each of the 7 lifecycle operations
+ * - Reusable, centralized data validation and lifecycle transition constraints
+ * - Automated detection of predefined policy violations into the persistent Violation Log
+ * - Chain-of-custody ownership history with strict validation
  * - Terminal state lock: Disposed AWS records cannot undergo further state transitions
- * - Cryptographic/audit transaction log creation for every state mutation
- * - Durable persistence across page reloads via local storage abstraction
+ * - Durable persistence across page reloads via localStorage abstraction
  */
 
 import {
@@ -20,6 +23,7 @@ import {
   AuditRecord,
   IncidentRecord,
   ViolationRecord,
+  OwnershipTransferRecord,
   UserRole,
   CertificationStatus,
   OverallLifecycleStatus,
@@ -32,9 +36,11 @@ import {
   DEMO_INCIDENTS,
   DEMO_VIOLATIONS,
 } from '../data/mockData';
-import { canPerformLifecycleOperation, LifecycleOperation } from '../utils/permissions';
+import { canPerformLifecycleOperation } from '../utils/permissions';
+import { ValidationService } from './validationService';
+import { PolicyEngine } from './policyEngine';
 
-const STORAGE_KEY = 'securechain_awlm_db_v2';
+const STORAGE_KEY = 'securechain_awlm_db_v3';
 
 interface StoredDatabase {
   awsRecords: AwsRecord[];
@@ -77,7 +83,6 @@ function saveDatabase(data: StoredDatabase): void {
   }
 }
 
-// Generate unique timestamp string
 function getTimestamp(): string {
   const now = new Date();
   return now.toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
@@ -130,6 +135,130 @@ export const DataService = {
     saveDatabase(initial);
   },
 
+  /**
+   * Helper to log an automated violation into persistent storage
+   */
+  logAutomatedViolation(
+    awsId: string,
+    policyId: string,
+    violationType: string,
+    severity: 'High' | 'Medium' | 'Low',
+    description: string,
+    triggeredBy: string,
+    role: UserRole
+  ): ViolationRecord {
+    const db = loadDatabase();
+    const violation: ViolationRecord = {
+      id: generateId('VIO'),
+      awsId,
+      policyId,
+      violationType,
+      severity,
+      description,
+      detectedDate: getTimestamp(),
+      detectedBy: 'Automated Policy Engine',
+      triggeredBy,
+      role,
+      status: 'Open',
+    };
+
+    db.violations.unshift(violation);
+    saveDatabase(db);
+    return violation;
+  },
+
+  /**
+   * Update status of an automated violation (Under Review, Resolved)
+   */
+  updateViolationStatus(
+    violationId: string,
+    status: 'Open' | 'Under Review' | 'Resolved',
+    resolutionNotes?: string
+  ): { success: boolean; violation?: ViolationRecord; error?: string } {
+    const db = loadDatabase();
+    const index = db.violations.findIndex((v) => v.id === violationId);
+    if (index === -1) {
+      return { success: false, error: `Violation '${violationId}' not found.` };
+    }
+
+    db.violations[index] = {
+      ...db.violations[index],
+      status,
+      resolutionNotes: resolutionNotes || db.violations[index].resolutionNotes,
+    };
+    saveDatabase(db);
+    return { success: true, violation: db.violations[index] };
+  },
+
+  /**
+   * Create an official incident report from an automated policy violation
+   * (Keep distinction clear between automated violations and operational incidents)
+   */
+  createIncidentFromViolation(
+    violationId: string,
+    actorRole: UserRole,
+    actorName: string,
+    customTitle?: string
+  ): { success: boolean; incident?: IncidentRecord; error?: string } {
+    const db = loadDatabase();
+    const violation = db.violations.find((v) => v.id === violationId);
+    if (!violation) {
+      return { success: false, error: `Violation '${violationId}' not found.` };
+    }
+
+    const incId = generateId('INC');
+    const timestamp = getTimestamp();
+
+    const incident: IncidentRecord = {
+      id: incId,
+      awsId: violation.awsId,
+      title: customTitle || `Escalated Incident: ${violation.violationType}`,
+      severity: violation.severity === 'High' ? 'Critical' : violation.severity === 'Medium' ? 'Major' : 'Minor',
+      reportedBy: actorRole,
+      reportDate: timestamp.substring(0, 10),
+      status: 'Under Review',
+      summary: `Automated violation (${violation.id}) escalated to formal incident investigation. Description: ${violation.description}`,
+      resolutionNotes: `Initiated by ${actorName} (${actorRole}). Linked to Policy: ${violation.policyId}.`,
+    };
+
+    // Update violation with relatedIncidentId
+    violation.relatedIncidentId = incId;
+    violation.status = 'Under Review';
+
+    // Update target AWS record incident status if asset found
+    const awsIndex = db.awsRecords.findIndex((r) => r.id === violation.awsId);
+    if (awsIndex !== -1) {
+      const aws = db.awsRecords[awsIndex];
+      const newEvent: LifecycleEvent = {
+        id: generateId('EVT-INC'),
+        stage: 'Incident Reporting',
+        isConditional: true,
+        title: `INCIDENT ESCALATION: ${violation.violationType}`,
+        timestamp,
+        actor: actorName,
+        actorRole,
+        status: 'Flagged',
+        details: `Automated policy violation '${violation.id}' escalated to formal incident '${incId}'.`,
+        recordIdentifier: incId,
+        notes: `Policy Reference: ${violation.policyId}`,
+      };
+
+      db.awsRecords[awsIndex] = {
+        ...aws,
+        incidentStatus: 'Flagged',
+        lifecycleStatus: 'Incident Flagged',
+        auditStatus: 'Requires Review',
+        lastUpdated: timestamp,
+        lifecycleHistory: [...aws.lifecycleHistory, newEvent],
+      };
+    }
+
+    db.incidentRecords.unshift(incident);
+    saveDatabase(db);
+
+    return { success: true, incident };
+  },
+
   // =========================================================================
   // 1. MANUFACTURING & CERTIFICATION
   // =========================================================================
@@ -146,23 +275,39 @@ export const DataService = {
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'manufacturing_certification')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to register manufacturing and certification records.`,
-      };
+    const db = loadDatabase();
+
+    // Centralized validation layer
+    const validation = ValidationService.validateRegistration(
+      {
+        id: payload.id,
+        systemName: payload.id,
+        manufacturer: payload.manufacturer,
+        manufactureDate: payload.manufactureDate,
+        certificationId: payload.certificationReference,
+        certificationStatus: payload.certificationStatus,
+        systemType: payload.systemClassification,
+      },
+      db.awsRecords,
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          payload.id || 'UNASSIGNED',
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
     const trimmedId = payload.id.trim().toUpperCase();
-    if (!trimmedId) {
-      return { success: false, error: 'AWS ID is required (e.g. AWS-007).' };
-    }
-
-    const db = loadDatabase();
-    if (db.awsRecords.some((r) => r.id.toUpperCase() === trimmedId)) {
-      return { success: false, error: `AWS record with ID '${trimmedId}' already exists in registry.` };
-    }
-
     const timestamp = getTimestamp();
     const isCertified = payload.certificationStatus === 'Certified';
 
@@ -177,7 +322,7 @@ export const DataService = {
         actor: actorName,
         actorRole,
         status: isCertified ? 'Completed' : 'Pending',
-        details: `Hardware identity enrolled by ${payload.manufacturer || 'Manufacturer'}. Classification: ${payload.systemClassification}. Certification standard ref: ${payload.certificationReference || 'STD-ISO-AUTONOMOUS'}.`,
+        details: `Hardware identity enrolled by ${payload.manufacturer || 'Manufacturer'}. Classification: ${payload.systemClassification}. Certification ref: ${payload.certificationReference}.`,
         recordIdentifier: `REC-MFG-CERT-${trimmedId.replace('AWS-', '')}`,
         notes: payload.notes,
       },
@@ -200,10 +345,15 @@ export const DataService = {
       createdTimestamp: timestamp,
       lastUpdated: timestamp,
       systemType: payload.systemClassification || 'Simulated Autonomous System',
-      complianceStatus: isCertified ? 'Compliant' : 'Pending / Not Evaluated',
+      complianceStatus: isCertified ? 'Compliant' : 'Pending',
       notes: payload.notes,
       lifecycleHistory: events,
+      ownershipHistory: [],
     };
+
+    // Re-evaluate compliance status with PolicyEngine
+    const report = PolicyEngine.evaluateAwsRecord(newRecord);
+    newRecord.complianceStatus = report.derivedStatus;
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-MFG'),
@@ -224,7 +374,7 @@ export const DataService = {
   },
 
   // =========================================================================
-  // 2. OWNERSHIP TRANSFER
+  // 2. OWNERSHIP TRANSFER (PHASE 4 SECTION 1 REQUIREMENTS)
   // =========================================================================
   transferOwnership(
     awsId: string,
@@ -238,31 +388,48 @@ export const DataService = {
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'ownership_transfer')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to record ownership transfers.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    // Centralized validation layer
+    const validation = ValidationService.validateOwnershipTransfer(record, payload, actorRole);
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    // Terminal state check
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `Operation Rejected: AWS record '${awsId}' is Decommissioned / Disposed (terminal lifecycle state). No further transitions are permitted.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const prevOwner = record.currentOwner;
     const timestamp = getTimestamp();
+    const isCompleted = payload.approvalStatus !== 'In Transit';
+
+    // Model dedicated OwnershipTransferRecord
+    const transferRecord: OwnershipTransferRecord = {
+      id: generateId('TRF'),
+      awsId,
+      previousOwner: prevOwner,
+      newOwner: payload.newOwner,
+      transferDate: payload.transferDate,
+      transferStatus: isCompleted ? 'Completed' : 'In Progress',
+      recordedBy: actorName,
+      recordedByRole: actorRole,
+      reason: payload.reason,
+      notes: payload.notes,
+    };
 
     const newEvent: LifecycleEvent = {
       id: generateId('EVT-TRF'),
@@ -271,19 +438,34 @@ export const DataService = {
       timestamp,
       actor: actorName,
       actorRole,
-      status: payload.approvalStatus === 'In Transit' ? 'In Progress' : 'Completed',
-      details: `Custody transition authorized. Reason: ${payload.reason || 'Operational logistics transfer'}. Previous: ${prevOwner}, New: ${payload.newOwner}.`,
-      recordIdentifier: `REC-TRF-${Date.now().toString().slice(-6)}`,
+      status: isCompleted ? 'Completed' : 'In Progress',
+      details: `Custody transition authorized. Reason: ${payload.reason}. Previous: ${prevOwner}, New: ${payload.newOwner}.`,
+      recordIdentifier: transferRecord.id,
       notes: payload.notes,
     };
 
+    // The AWS current owner must always equal the New Owner of the latest valid completed transfer
+    const updatedOwner = isCompleted ? payload.newOwner : record.currentOwner;
+    const nextLifecycleStatus = isCompleted
+      ? record.lifecycleStatus === 'In Transit'
+        ? 'Active Service'
+        : record.lifecycleStatus
+      : 'In Transit';
+
+    const existingHistory = record.ownershipHistory || [];
+
     const updatedRecord: AwsRecord = {
       ...record,
-      currentOwner: payload.approvalStatus === 'In Transit' ? 'Supply Chain Operator' : payload.newOwner,
-      lifecycleStatus: payload.approvalStatus === 'In Transit' ? 'In Transit' : record.lifecycleStatus === 'In Transit' ? 'Active Service' : record.lifecycleStatus,
+      currentOwner: updatedOwner,
+      lifecycleStatus: nextLifecycleStatus,
       lastUpdated: timestamp,
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
+      ownershipHistory: [...existingHistory, transferRecord],
     };
+
+    // Recalculate compliance status with PolicyEngine
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-TRF'),
@@ -314,31 +496,45 @@ export const DataService = {
       authorizedBy: string;
       validUntil?: string;
       notes?: string;
+      operationalDomain?: string;
     },
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'deployment_authorization')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to record deployment authorization.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    const validation = ValidationService.validateDeploymentAuthorization(
+      record,
+      {
+        authorizationStatus: payload.authorizationStatus,
+        authorizationReference: `AUTH-${awsId.replace('AWS-', '')}-${Date.now().toString().slice(-4)}`,
+        authorizedDate: payload.authorizationDate,
+        expiryDate: payload.validUntil,
+        operationalDomain: payload.operationalDomain || 'Designated Corridors',
+        notes: payload.notes,
+      },
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    // Terminal state check
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `Operation Rejected: AWS record '${awsId}' is Decommissioned / Disposed. Deployment cannot be authorized.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const timestamp = getTimestamp();
@@ -371,6 +567,10 @@ export const DataService = {
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
 
+    // Re-evaluate compliance
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
+
     const newTx: LifecycleTransaction = {
       id: generateId('TX-AUTH'),
       awsId,
@@ -400,31 +600,44 @@ export const DataService = {
       usageStatus: 'Active Service' | 'In Reserve' | 'Standby' | 'Routine Maintenance';
       recordedBy: string;
       notes?: string;
+      operationalLocation?: string;
     },
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'usage_tracking')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to record operational usage lifecycle events.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    const validation = ValidationService.validateUsageTracking(
+      record,
+      {
+        eventType: payload.usageStatus,
+        operationalLocation: payload.operationalLocation || 'Operational Facility Alpha',
+        timestamp: payload.usageDate || getTimestamp(),
+        missionReadinessStatus: 'Nominal',
+        notes: payload.notes,
+      },
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    // Terminal state check
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `Operation Rejected: AWS record '${awsId}' is Decommissioned / Disposed. Usage cannot be logged for retired assets.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const timestamp = getTimestamp();
@@ -455,6 +668,9 @@ export const DataService = {
       lastUpdated: timestamp,
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
+
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-USE'),
@@ -490,27 +706,39 @@ export const DataService = {
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'audit_compliance')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to record audit & compliance events.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    const validation = ValidationService.validateAuditEvent(
+      record,
+      {
+        auditType: payload.auditType,
+        inspector: payload.auditedBy || actorName,
+        auditDate: payload.auditDate,
+        result: payload.auditStatus,
+        findings: payload.findings,
+      },
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    // Terminal state check
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `Operation Rejected: AWS record '${awsId}' is Decommissioned / Disposed. Asset lifecycle is terminated.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const timestamp = getTimestamp();
@@ -549,11 +777,14 @@ export const DataService = {
     const updatedRecord: AwsRecord = {
       ...record,
       auditStatus: payload.auditStatus as AuditLifecycleStatus,
-      complianceStatus: payload.auditStatus,
       lifecycleStatus: isNonCompliant ? 'Under Audit' : record.lifecycleStatus,
       lastUpdated: timestamp,
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
+
+    // Re-evaluate compliance
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-AUD'),
@@ -592,27 +823,38 @@ export const DataService = {
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'incident_reporting')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to file incident reports.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    const validation = ValidationService.validateIncidentReport(
+      record,
+      {
+        title: payload.incidentType,
+        severity: payload.severity,
+        summary: payload.description,
+        reportDate: payload.incidentDate,
+      },
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    // Terminal state check
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `Operation Rejected: AWS record '${awsId}' is Decommissioned / Disposed. Cannot log incidents for decommissioned hardware.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const timestamp = getTimestamp();
@@ -653,6 +895,9 @@ export const DataService = {
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
 
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = report.derivedStatus;
+
     const newTx: LifecycleTransaction = {
       id: generateId('TX-INC'),
       awsId,
@@ -682,31 +927,45 @@ export const DataService = {
       disposalStatus: 'Pending Disposal' | 'Decommissioned';
       authorizedBy: string;
       disposalReference: string;
+      facility?: string;
+      reason?: string;
       notes?: string;
     },
     actorRole: UserRole,
     actorName: string
   ): { success: boolean; record?: AwsRecord; error?: string } {
-    if (!canPerformLifecycleOperation(actorRole, 'disposal')) {
-      return {
-        success: false,
-        error: `Unauthorized: Role '${actorRole}' is not permitted to execute disposal / decommissioning protocols.`,
-      };
-    }
-
     const db = loadDatabase();
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
-    if (index === -1) {
-      return { success: false, error: `AWS record '${awsId}' not found.` };
+    const record = index !== -1 ? db.awsRecords[index] : null;
+
+    const validation = ValidationService.validateDisposal(
+      record,
+      {
+        disposalReference: payload.disposalReference,
+        disposalDate: payload.disposalDate,
+        facility: payload.facility || 'Demilitarization Facility Omega',
+        reason: payload.reason || payload.notes || 'End-of-life retirement',
+      },
+      actorRole
+    );
+
+    if (!validation.isValid) {
+      if (validation.violation) {
+        this.logAutomatedViolation(
+          awsId,
+          validation.violation.policyId,
+          validation.violation.violationType,
+          validation.violation.severity,
+          validation.violation.description,
+          actorName,
+          actorRole
+        );
+      }
+      return { success: false, error: validation.errors.join(' ') };
     }
 
-    const record = db.awsRecords[index];
-
-    if (record.lifecycleStatus === 'Decommissioned' && record.disposalStatus === 'Decommissioned') {
-      return {
-        success: false,
-        error: `AWS record '${awsId}' is already completely Decommissioned. No further disposal actions are required.`,
-      };
+    if (!record) {
+      return { success: false, error: `AWS record '${awsId}' not found.` };
     }
 
     const timestamp = getTimestamp();
@@ -738,6 +997,9 @@ export const DataService = {
       lastUpdated: timestamp,
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
+
+    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+    updatedRecord.complianceStatus = isFinalDecommission ? 'Decommissioned' : report.derivedStatus;
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-DISP'),

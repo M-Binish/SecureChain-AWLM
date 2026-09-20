@@ -113,7 +113,7 @@ const STAGE_CONFIGS: Record<string, StageMetadata> = {
   },
   'disposal': {
     operationKey: 'disposal',
-    title: 'Disposal & Decommissioning Protocol (Terminal)',
+    title: 'Disposal (Terminal)',
     subtitle: 'Final lifecycle stage: permanent demilitarization, cryptographic key zeroization, and asset retirement.',
     stageName: 'Disposal',
     icon: Trash2,

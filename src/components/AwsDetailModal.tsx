@@ -2,7 +2,25 @@ import React from 'react';
 import { AwsRecord } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { LifecycleTimeline } from './LifecycleTimeline';
-import { X, Shield, Building2, User, Calendar, Award, CheckCircle, Clock, AlertTriangle, Trash2, Info } from 'lucide-react';
+import { PolicyEngine } from '../services/policyEngine';
+import {
+  X,
+  Shield,
+  Building2,
+  User,
+  Calendar,
+  Award,
+  CheckCircle,
+  Clock,
+  AlertTriangle,
+  Trash2,
+  Info,
+  ArrowDown,
+  ArrowRightLeft,
+  CheckCircle2,
+  AlertOctagon,
+  FileCheck,
+} from 'lucide-react';
 
 interface AwsDetailModalProps {
   record: AwsRecord | null;
@@ -11,6 +29,27 @@ interface AwsDetailModalProps {
 
 export const AwsDetailModal: React.FC<AwsDetailModalProps> = ({ record, onClose }) => {
   if (!record) return null;
+
+  // Run policy engine evaluation on this record
+  const evaluationReport = PolicyEngine.evaluateAwsRecord(record);
+
+  // Compute distinct ownership chain nodes
+  const ownershipChain: string[] = [record.manufacturer || 'Manufacturer'];
+  if (record.ownershipHistory && record.ownershipHistory.length > 0) {
+    record.ownershipHistory.forEach((transfer) => {
+      if (transfer.transferStatus === 'Completed' || transfer.transferStatus === 'In Progress') {
+        if (!ownershipChain.includes(transfer.previousOwner)) {
+          ownershipChain.push(transfer.previousOwner);
+        }
+        if (!ownershipChain.includes(transfer.newOwner)) {
+          ownershipChain.push(transfer.newOwner);
+        }
+      }
+    });
+  }
+  if (!ownershipChain.includes(record.currentOwner)) {
+    ownershipChain.push(record.currentOwner);
+  }
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6">
@@ -73,10 +112,12 @@ export const AwsDetailModal: React.FC<AwsDetailModalProps> = ({ record, onClose 
 
             <div>
               <div className="text-slate-500 font-medium mb-1 flex items-center gap-1">
-                <User className="w-3.5 h-3.5 text-slate-400" />
-                <span>Current Owner</span>
+                <User className="w-3.5 h-3.5 text-blue-600" />
+                <span className="font-bold text-blue-900">Current Owner</span>
               </div>
-              <div className="text-slate-900 font-semibold">{record.currentOwner}</div>
+              <div className="text-blue-700 font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-200 inline-block">
+                {record.currentOwner}
+              </div>
             </div>
 
             <div>
@@ -133,22 +174,179 @@ export const AwsDetailModal: React.FC<AwsDetailModalProps> = ({ record, onClose 
             <div className="col-span-2">
               <div className="text-slate-500 font-medium mb-1 flex items-center gap-1">
                 <Shield className="w-3.5 h-3.5 text-slate-400" />
-                <span>Compliance Status</span>
+                <span>Derived Compliance Status (Policy Engine)</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                  {record.complianceStatus}
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${
+                    evaluationReport.derivedStatus === 'Compliant'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                      : evaluationReport.derivedStatus === 'Non-Compliant'
+                      ? 'bg-rose-50 text-rose-800 border-rose-300'
+                      : evaluationReport.derivedStatus === 'Requires Review'
+                      ? 'bg-amber-50 text-amber-800 border-amber-300'
+                      : 'bg-slate-100 text-slate-700 border-slate-300'
+                  }`}
+                >
+                  {evaluationReport.derivedStatus}
                 </span>
-                <span className="text-slate-500 text-[11px]">• Updated: {record.lastUpdated}</span>
+                <span className="text-slate-500 text-[11px]">
+                  • {evaluationReport.passedCount} Passed, {evaluationReport.reviewCount} Review, {evaluationReport.failedCount} Failed
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Academic Prototype Notice */}
-          <div className="bg-blue-50/70 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 flex items-start gap-2">
-            <Info className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
+          {/* SECTION 1: OWNERSHIP TRANSFER TRACEABILITY */}
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-blue-600" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                  Ownership & Custody Traceability
+                </h4>
+              </div>
+              <div className="text-xs font-medium text-slate-600">
+                Current Owner: <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{record.currentOwner}</span>
+              </div>
+            </div>
+
+            {/* Visual Ownership Chain: Previous Owner ↓ New Owner */}
             <div>
-              <strong className="font-semibold">Academic Simulation Record:</strong> This digital identity tracks an autonomous weapon system throughout its authorized lifecycle. Compliance evaluation will be computed in a future phase via the formal policy engine.
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                Custody Transition Sequence
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-xs bg-slate-50 p-3 rounded-lg border border-slate-200">
+                {ownershipChain.map((owner, idx) => {
+                  const isCurrent = owner === record.currentOwner;
+                  return (
+                    <React.Fragment key={idx}>
+                      <div
+                        className={`px-3 py-1.5 rounded-md font-semibold text-xs border ${
+                          isCurrent
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            : 'bg-white text-slate-800 border-slate-300'
+                        }`}
+                      >
+                        {owner}
+                        {isCurrent && <span className="ml-1.5 text-[10px] uppercase opacity-85 font-mono">(Current)</span>}
+                      </div>
+                      {idx < ownershipChain.length - 1 && (
+                        <div className="text-slate-400 font-bold flex items-center px-1">
+                          <span>↓</span>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Ownership History Entries */}
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                Ownership History Records
+              </div>
+              {record.ownershipHistory && record.ownershipHistory.length > 0 ? (
+                <div className="space-y-2.5">
+                  {record.ownershipHistory.map((transfer, idx) => (
+                    <div
+                      key={transfer.id || idx}
+                      className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5 hover:border-slate-300 transition-colors"
+                    >
+                      <div className="flex items-center justify-between font-semibold">
+                        <span className="text-slate-900 font-bold">Transfer {idx + 1}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                            transfer.transferStatus === 'Completed'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                              : transfer.transferStatus === 'In Progress'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}
+                        >
+                          Status: {transfer.transferStatus}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 pt-1">
+                        <div>
+                          <strong className="text-slate-800">From:</strong> {transfer.previousOwner}
+                        </div>
+                        <div>
+                          <strong className="text-slate-800">To:</strong> {transfer.newOwner}
+                        </div>
+                        <div>
+                          <strong className="text-slate-800">Date:</strong> {transfer.transferDate}
+                        </div>
+                        <div>
+                          <strong className="text-slate-800">Recorded By:</strong> {transfer.recordedBy} ({transfer.recordedByRole})
+                        </div>
+                      </div>
+                      {transfer.reason && (
+                        <div className="text-[11px] text-slate-600 pt-1 border-t border-slate-200/60">
+                          <strong className="text-slate-700">Reason:</strong> {transfer.reason}
+                        </div>
+                      )}
+                      {transfer.notes && (
+                        <div className="text-[11px] text-slate-500 italic">
+                          <strong>Notes:</strong> {transfer.notes}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-500 italic text-center">
+                  Genesis unit in manufacturer assembly. No custody transfers recorded yet.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* SECTION 4: POLICY-BASED COMPLIANCE EVALUATION */}
+          <div className="bg-white border border-slate-200 rounded-lg p-5 shadow-xs space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+              <div className="flex items-center gap-2">
+                <FileCheck className="w-4 h-4 text-emerald-600" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900">
+                  Automated Policy Engine Evaluation
+                </h4>
+              </div>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {evaluationReport.evaluations.length} Machine-Readable Rules Checked
+              </span>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded text-xs text-slate-700">
+              <strong>Evaluation Summary:</strong> {evaluationReport.summaryMessage}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+              {evaluationReport.evaluations.map((evalItem) => (
+                <div
+                  key={evalItem.policyId}
+                  className="p-2.5 rounded border border-slate-200 bg-white space-y-1"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[11px] font-bold text-slate-700">
+                      {evalItem.policyId}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono border ${
+                        evalItem.result === 'PASS'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : evalItem.result === 'REVIEW'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-rose-50 text-rose-700 border-rose-200'
+                      }`}
+                    >
+                      {evalItem.result}
+                    </span>
+                  </div>
+                  <div className="font-semibold text-slate-900">{evalItem.policyName}</div>
+                  <div className="text-[11px] text-slate-500 leading-snug">{evalItem.details}</div>
+                </div>
+              ))}
             </div>
           </div>
 
