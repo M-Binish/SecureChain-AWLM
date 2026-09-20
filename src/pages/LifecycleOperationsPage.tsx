@@ -10,6 +10,11 @@ import {
 import { DataService } from '../services/dataService';
 import { canPerformLifecycleOperation, LifecycleOperation } from '../utils/permissions';
 import {
+  getResponsibleRoleForRecord,
+  getDisposalStageInfo,
+  evaluateLifecycleOperation,
+} from '../services/lifecycleEligibilityMatrix';
+import {
   FileCheck2,
   ArrowRightLeft,
   ShieldCheck,
@@ -28,6 +33,11 @@ import {
   ExternalLink,
   Search,
   Check,
+  Award,
+  RotateCcw,
+  FileText,
+  Shield,
+  ChevronRight,
 } from 'lucide-react';
 
 interface LifecycleOperationsPageProps {
@@ -54,10 +64,10 @@ const STAGE_CONFIGS: Record<string, StageMetadata> = {
   'manufacturing-certification': {
     operationKey: 'manufacturing_certification',
     title: 'Manufacturing & Certification Stage',
-    subtitle: 'Register genesis simulated autonomous weapon identities, root-of-trust provisioning, and initial safety certification baseline.',
+    subtitle: 'Register genesis simulated autonomous weapon identities, root-of-trust provisioning, and regulatory safety certification covenants.',
     stageName: 'Manufacturing & Certification',
     icon: FileCheck2,
-    authorizedRoles: ['Manufacturer', 'Administrator'],
+    authorizedRoles: ['Manufacturer', 'Regulator', 'Administrator'],
     stageType: 'Initial',
     color: 'blue',
   },
@@ -114,10 +124,10 @@ const STAGE_CONFIGS: Record<string, StageMetadata> = {
   'disposal': {
     operationKey: 'disposal',
     title: 'Disposal (Terminal)',
-    subtitle: 'Final lifecycle stage: permanent demilitarization, cryptographic key zeroization, and asset retirement.',
+    subtitle: 'Multi-stakeholder 5-stage decommissioning workflow: military request, sovereign approval, compliance audit, hardware zeroization, and terminal closeout.',
     stageName: 'Disposal',
     icon: Trash2,
-    authorizedRoles: ['Military / Defense', 'Regulator', 'Administrator'],
+    authorizedRoles: ['Military / Defense', 'Government', 'Auditor / Inspector', 'Manufacturer', 'Administrator'],
     stageType: 'Terminal',
     color: 'rose',
   },
@@ -140,6 +150,9 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
   const [searchFilter, setSearchFilter] = useState<string>('');
 
   // 1. Manufacturing Form State
+  const [mfgSubTab, setMfgSubTab] = useState<'enrollment' | 'certification_review'>(
+    userRole === 'Regulator' ? 'certification_review' : 'enrollment'
+  );
   const [mfgId, setMfgId] = useState<string>(`AWS-00${awsRecords.length + 1}`);
   const [mfgClass, setMfgClass] = useState<string>('Simulated Autonomous System - Unit');
   const [mfgEntity, setMfgEntity] = useState<string>('Manufacturer');
@@ -147,6 +160,14 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
   const [mfgCertStatus, setMfgCertStatus] = useState<CertificationStatus>('Certified');
   const [mfgCertRef, setMfgCertRef] = useState<string>(`CERT-2026-00${awsRecords.length + 1}`);
   const [mfgNotes, setMfgNotes] = useState<string>('Initial manufacturing bench testing and cryptographic enrollment completed.');
+
+  // 1b. Regulatory Certification Review State
+  const [certAwsId, setCertAwsId] = useState<string>(awsRecords[0]?.id || '');
+  const [certDecision, setCertDecision] = useState<'Approve' | 'Needs Revision' | 'Reject' | 'Revoke' | 'Resubmit'>('Approve');
+  const [certId, setCertId] = useState<string>(`CERT-REG-${Date.now().toString().slice(-4)}`);
+  const [certNotes, setCertNotes] = useState<string>('Evaluated against consortium autonomous weapon safety directives. All baseline covenant requirements met.');
+  const [certIsAdminOverride, setCertIsAdminOverride] = useState<boolean>(false);
+  const [certOverrideReason, setCertOverrideReason] = useState<string>('');
 
   // 2. Ownership Transfer Form State
   const [trfAwsId, setTrfAwsId] = useState<string>(awsRecords[0]?.id || '');
@@ -190,18 +211,23 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
   const [incStatus, setIncStatus] = useState<'Pending Audit' | 'Under Review' | 'Closed'>('Under Review');
   const [incNotes, setIncNotes] = useState<string>('Auto-failsafe standby engaged. Awaiting inspection review.');
 
-  // 7. Disposal Form State
+  // 7. Staged Disposal Form State (5-Stage State Machine)
   const [dispAwsId, setDispAwsId] = useState<string>(awsRecords[0]?.id || '');
-  const [dispStatus, setDispStatus] = useState<'Pending Disposal' | 'Decommissioned'>('Decommissioned');
   const [dispDate, setDispDate] = useState<string>(new Date().toISOString().substring(0, 10));
-  const [dispBy, setDispBy] = useState<string>('Decommissioning Authority');
-  const [dispRef, setDispRef] = useState<string>(`DISP-2026-${Date.now().toString().slice(-4)}`);
-  const [dispNotes, setDispNotes] = useState<string>('Demilitarization protocol executed. Cryptographic enclave zeroized and frame retired.');
+  const [dispRef, setDispRef] = useState<string>(`DISP-REF-${Date.now().toString().slice(-5)}`);
+  const [dispFacility, setDispFacility] = useState<string>('Demilitarization Depot Alpha');
+  const [dispReason, setDispReason] = useState<string>('End of statutory service life / hardware cycle retirement');
+  const [dispNotes, setDispNotes] = useState<string>('');
+  const [dispIsAdminOverride, setDispIsAdminOverride] = useState<boolean>(false);
+  const [dispOverrideReason, setDispOverrideReason] = useState<string>('');
 
   // Current selected AWS for each stage form to check terminal state
   const getSelectedRecordForStage = (): AwsRecord | null => {
     let targetId = '';
     switch (config.operationKey) {
+      case 'manufacturing_certification':
+        targetId = mfgSubTab === 'certification_review' ? certAwsId : '';
+        break;
       case 'ownership_transfer':
         targetId = trfAwsId;
         break;
@@ -230,6 +256,11 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
   const isSelectedRecordDisposed =
     selectedRecord?.lifecycleStatus === 'Decommissioned' ||
     selectedRecord?.disposalStatus === 'Decommissioned';
+
+  const disposalStageInfo =
+    config.operationKey === 'disposal' && selectedRecord
+      ? getDisposalStageInfo(selectedRecord, userRole)
+      : null;
 
   // Extract all historical events matching this stage across all monitored AWS records
   const stageEvents = useMemo(() => {
@@ -271,29 +302,53 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
 
     switch (config.operationKey) {
       case 'manufacturing_certification':
-        res = DataService.registerAwsRecord(
-          {
-            id: mfgId,
-            systemClassification: mfgClass,
-            manufacturer: mfgEntity,
-            manufactureDate: mfgDate,
-            certificationStatus: mfgCertStatus,
-            certificationReference: mfgCertRef,
-            notes: mfgNotes,
-          },
-          userRole,
-          `${userRole} Officer`
-        );
-        if (res.success && res.record) {
-          onRecordUpdated(res.record);
-          setFeedback({
-            type: 'success',
-            message: `AWS record ${res.record.id} successfully registered and persisted in the application data layer.`,
-          });
-          // prepare next ID
-          setMfgId(`AWS-00${awsRecords.length + 2}`);
+        if (mfgSubTab === 'enrollment') {
+          res = DataService.registerAwsRecord(
+            {
+              id: mfgId,
+              systemClassification: mfgClass,
+              manufacturer: mfgEntity,
+              manufactureDate: mfgDate,
+              certificationStatus: mfgCertStatus,
+              certificationReference: mfgCertRef,
+              notes: mfgNotes,
+            },
+            userRole,
+            `${userRole} Officer`
+          );
+          if (res.success && res.record) {
+            onRecordUpdated(res.record);
+            setFeedback({
+              type: 'success',
+              message: `AWS record ${res.record.id} successfully registered and persisted in the application data layer.`,
+            });
+            // prepare next ID
+            setMfgId(`AWS-00${awsRecords.length + 2}`);
+          } else {
+            setFeedback({ type: 'error', message: res.error || 'Failed to register AWS.' });
+          }
         } else {
-          setFeedback({ type: 'error', message: res.error || 'Failed to register AWS.' });
+          res = DataService.reviewCertification(
+            certAwsId,
+            {
+              decision: certDecision,
+              certificationId: certId,
+              notes: certNotes,
+              isAdministrativeOverride: certIsAdminOverride,
+              overrideReason: certOverrideReason,
+            },
+            userRole,
+            `${userRole} Officer`
+          );
+          if (res.success && res.record) {
+            onRecordUpdated(res.record);
+            setFeedback({
+              type: 'success',
+              message: `Regulatory covenant review decision '${certDecision}' recorded for ${certAwsId}. Asset certification status: '${res.record.certificationStatus}'.`,
+            });
+          } else {
+            setFeedback({ type: 'error', message: res.error || 'Certification review failed.' });
+          }
         }
         break;
 
@@ -419,29 +474,47 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
         }
         break;
 
-      case 'disposal':
-        res = DataService.recordDisposal(
+      case 'disposal': {
+        const targetRecord = awsRecords.find((r) => r.id === dispAwsId);
+        const stageInfo = targetRecord ? getDisposalStageInfo(targetRecord, userRole) : null;
+
+        let stageStep: 'request' | 'government_approval' | 'audit' | 'manufacturer_finalization' | 'military_record_update' = 'request';
+        if (stageInfo) {
+          if (stageInfo.stageStep === 1) stageStep = 'request';
+          else if (stageInfo.stageStep === 2) stageStep = 'government_approval';
+          else if (stageInfo.stageStep === 3) stageStep = 'audit';
+          else if (stageInfo.stageStep === 4) stageStep = 'manufacturer_finalization';
+          else if (stageInfo.stageStep === 5) stageStep = 'military_record_update';
+        }
+
+        res = DataService.executeStagedDisposal(
           dispAwsId,
           {
+            stageStep,
+            disposalReference: dispRef || `DISP-${Date.now().toString().slice(-6)}`,
             disposalDate: dispDate,
-            disposalStatus: dispStatus,
-            authorizedBy: dispBy,
-            disposalReference: dispRef,
+            facility: dispFacility,
+            reason: dispReason,
             notes: dispNotes,
+            isAdministrativeOverride: dispIsAdminOverride,
+            overrideReason: dispOverrideReason,
           },
           userRole,
-          dispBy
+          `${userRole} Officer`
         );
         if (res.success && res.record) {
           onRecordUpdated(res.record);
           setFeedback({
             type: 'success',
-            message: `Disposal protocol recorded for ${dispAwsId}. Asset status set to '${dispStatus}'. Terminal state locked.`,
+            message: `Disposal Stage ${stageInfo?.stageStep || 1} (${stageInfo?.stageName || 'Executed'}) recorded for ${dispAwsId}. Asset status updated to '${res.record.disposalStatus}'.`,
           });
+          // Cycle reference ID for subsequent operations
+          setDispRef(`DISP-REF-${Date.now().toString().slice(-5)}`);
         } else {
           setFeedback({ type: 'error', message: res.error || 'Disposal protocol execution failed.' });
         }
         break;
+      }
     }
   };
 
@@ -551,100 +624,314 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+                {/* Asset Context Card: Displayed whenever an asset is selected for the active operation */}
+                {selectedRecord && (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-blue-700">{selectedRecord.id}</span>
+                        <span className="text-slate-400">•</span>
+                        <span className="text-slate-800 font-semibold">{selectedRecord.systemName}</span>
+                      </div>
+                      <StatusBadge status={selectedRecord.lifecycleStatus} size="sm" />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200 text-[11px]">
+                      <div>
+                        <span className="text-slate-500 block">Current Custodian</span>
+                        <span className="font-semibold text-slate-800">{selectedRecord.currentOwner}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Certification</span>
+                        <span className="font-semibold text-slate-800">{selectedRecord.certificationStatus}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Disposal Stage</span>
+                        <span className="font-semibold text-slate-800">{selectedRecord.disposalStatus || 'Not Scheduled'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block font-semibold text-indigo-900">Responsible Stakeholder</span>
+                        <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200 inline-block">
+                          {getResponsibleRoleForRecord(selectedRecord)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* 1. Manufacturing Form */}
                 {config.operationKey === 'manufacturing_certification' && (
                   <>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          AWS ID (Simulated Identifier)
-                        </label>
-                        <input
-                          type="text"
-                          value={mfgId}
-                          onChange={(e) => setMfgId(e.target.value)}
-                          placeholder="e.g. AWS-007"
-                          className="w-full p-2 border border-slate-300 rounded font-mono font-medium focus:ring-1 focus:ring-slate-900"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Manufacturing Date
-                        </label>
-                        <input
-                          type="date"
-                          value={mfgDate}
-                          onChange={(e) => setMfgDate(e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                          required
-                        />
-                      </div>
+                    {/* Sub-Tabs: Genesis Enrollment vs Regulatory Certification Review */}
+                    <div className="flex items-center gap-1 border-b border-slate-200 pb-2 mb-3">
+                      <button
+                        type="button"
+                        onClick={() => setMfgSubTab('enrollment')}
+                        className={`px-3 py-1.5 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          mfgSubTab === 'enrollment'
+                            ? 'bg-slate-900 text-white shadow-xs'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        <FileCheck2 className="w-3.5 h-3.5" />
+                        <span>Genesis Enrollment</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMfgSubTab('certification_review')}
+                        className={`px-3 py-1.5 rounded-md font-medium text-xs transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          mfgSubTab === 'certification_review'
+                            ? 'bg-slate-900 text-white shadow-xs'
+                            : 'text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        <Award className="w-3.5 h-3.5" />
+                        <span>Regulatory Certification & Covenant Review</span>
+                      </button>
                     </div>
 
-                    <div>
-                      <label className="block text-slate-700 font-bold mb-1">
-                        System Classification
-                      </label>
-                      <input
-                        type="text"
-                        value={mfgClass}
-                        onChange={(e) => setMfgClass(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                        required
-                      />
-                    </div>
+                    {mfgSubTab === 'enrollment' ? (
+                      <>
+                        {userRole !== 'Manufacturer' && userRole !== 'Administrator' && (
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded text-amber-900 text-xs flex items-start gap-2 mb-2">
+                            <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                            <div>
+                              <strong>Role Notice:</strong> Genesis enrollment is normally conducted by <strong>Manufacturer</strong>. Switch role in the header to submit enrollment.
+                            </div>
+                          </div>
+                        )}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              AWS ID (Simulated Identifier)
+                            </label>
+                            <input
+                              type="text"
+                              value={mfgId}
+                              onChange={(e) => setMfgId(e.target.value)}
+                              placeholder="e.g. AWS-007"
+                              className="w-full p-2 border border-slate-300 rounded font-mono font-medium focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Manufacturing Date
+                            </label>
+                            <input
+                              type="date"
+                              value={mfgDate}
+                              onChange={(e) => setMfgDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Manufacturer Entity
-                        </label>
-                        <input
-                          type="text"
-                          value={mfgEntity}
-                          onChange={(e) => setMfgEntity(e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded bg-slate-50 text-slate-700"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Certification Status
-                        </label>
-                        <select
-                          value={mfgCertStatus}
-                          onChange={(e) => setMfgCertStatus(e.target.value as CertificationStatus)}
-                          className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 font-medium"
-                        >
-                          <option value="Certified">Certified</option>
-                          <option value="Pending Review">Pending Review</option>
-                        </select>
-                      </div>
-                    </div>
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            System Classification
+                          </label>
+                          <input
+                            type="text"
+                            value={mfgClass}
+                            onChange={(e) => setMfgClass(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            required
+                          />
+                        </div>
 
-                    <div>
-                      <label className="block text-slate-700 font-bold mb-1">
-                        Certification Reference
-                      </label>
-                      <input
-                        type="text"
-                        value={mfgCertRef}
-                        onChange={(e) => setMfgCertRef(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
-                      />
-                    </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Manufacturer Entity
+                            </label>
+                            <input
+                              type="text"
+                              value={mfgEntity}
+                              onChange={(e) => setMfgEntity(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded bg-slate-50 text-slate-700"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Initial Certification Status
+                            </label>
+                            <select
+                              value={mfgCertStatus}
+                              onChange={(e) => setMfgCertStatus(e.target.value as CertificationStatus)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900 font-medium"
+                            >
+                              <option value="Pending Review">Pending Review (Standard Intake)</option>
+                              <option value="Certified">Certified (Factory Verified)</option>
+                            </select>
+                          </div>
+                        </div>
 
-                    <div>
-                      <label className="block text-slate-700 font-bold mb-1">
-                        Engineering Notes
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={mfgNotes}
-                        onChange={(e) => setMfgNotes(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                      />
-                    </div>
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Certification Reference
+                          </label>
+                          <input
+                            type="text"
+                            value={mfgCertRef}
+                            onChange={(e) => setMfgCertRef(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Engineering Notes
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={mfgNotes}
+                            onChange={(e) => setMfgNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {/* Regulatory Certification Review Sub-Mode */}
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Select AWS Asset for Regulatory Review
+                          </label>
+                          <select
+                            value={certAwsId}
+                            onChange={(e) => setCertAwsId(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded font-mono font-medium focus:ring-1 focus:ring-slate-900"
+                            required
+                          >
+                            {awsRecords.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.id} — {r.systemName} (Cert: {r.certificationStatus}, Stage: {r.lifecycleStatus})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Regulatory Action / Decision
+                          </label>
+                          <select
+                            value={certDecision}
+                            onChange={(e) => setCertDecision(e.target.value as any)}
+                            className="w-full p-2 border border-slate-300 rounded font-medium focus:ring-1 focus:ring-slate-900"
+                          >
+                            <option value="Approve">Approve Certification (Transition to Certified)</option>
+                            <option value="Needs Revision">Request Revision (Requires Engineering Correctives)</option>
+                            <option value="Reject">Reject Certification (Directives Non-Compliance)</option>
+                            <option value="Revoke">Revoke Certification (Safety Covenant Breach)</option>
+                            <option value="Resubmit">Resubmit for Review (Manufacturer Corrective Action)</option>
+                          </select>
+                        </div>
+
+                        {selectedRecord && (
+                          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded text-[11px] text-slate-600">
+                            <span className="font-semibold text-slate-800">State Transition Validation: </span>
+                            {certDecision === 'Approve' && (
+                              selectedRecord.certificationStatus === 'Pending Review'
+                                ? <span className="text-emerald-700">Valid: Asset is in 'Pending Review'. Regulatory approval will certify the weapon.</span>
+                                : <span className="text-rose-700">Invalid: Direct approval requires 'Pending Review' status. Current status is '{selectedRecord.certificationStatus}'.</span>
+                            )}
+                            {certDecision === 'Needs Revision' && (
+                              selectedRecord.certificationStatus === 'Pending Review'
+                                ? <span className="text-amber-700">Valid: Asset is in 'Pending Review' and can be flagged for revision.</span>
+                                : <span className="text-rose-700">Invalid: Needs Revision can only be set from 'Pending Review' status.</span>
+                            )}
+                            {certDecision === 'Reject' && (
+                              selectedRecord.certificationStatus === 'Pending Review'
+                                ? <span className="text-rose-700">Valid: Asset is in 'Pending Review' and will be marked as Rejected.</span>
+                                : <span className="text-rose-700">Invalid: Rejection requires 'Pending Review' status.</span>
+                            )}
+                            {certDecision === 'Revoke' && (
+                              selectedRecord.certificationStatus === 'Certified'
+                                ? <span className="text-rose-700">Valid: Certified asset will have statutory certification revoked.</span>
+                                : <span className="text-rose-700">Invalid: Only 'Certified' assets can have certification revoked. Current: '{selectedRecord.certificationStatus}'.</span>
+                            )}
+                            {certDecision === 'Resubmit' && (
+                              (selectedRecord.certificationStatus === 'Needs Revision' || selectedRecord.certificationStatus === 'Rejected' || selectedRecord.certificationStatus === 'Revoked')
+                                ? <span className="text-blue-700">Valid: Non-certified asset will be resubmitted to 'Pending Review' for regulator re-evaluation.</span>
+                                : <span className="text-rose-700">Invalid: Resubmission is only valid for assets in 'Needs Revision', 'Rejected', or 'Revoked' status.</span>
+                            )}
+                          </div>
+                        )}
+
+                        {userRole === 'Administrator' && (
+                          <div className="p-3 bg-amber-50 border border-amber-300 rounded space-y-2 text-xs text-amber-900">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                id="certAdminOverride"
+                                checked={certIsAdminOverride}
+                                onChange={(e) => setCertIsAdminOverride(e.target.checked)}
+                                className="rounded border-amber-400 text-slate-900 focus:ring-slate-900"
+                              />
+                              <label htmlFor="certAdminOverride" className="font-semibold cursor-pointer">
+                                Apply Explicit Administrative Override
+                              </label>
+                            </div>
+                            <p className="text-[11px] text-amber-800">
+                              Consortium Mandate: The Administrator cannot silently masquerade as statutory Regulator. If overriding without regulator delegation, provide an audited justification below.
+                            </p>
+                            {certIsAdminOverride && (
+                              <div>
+                                <label className="block font-semibold mb-1">
+                                  Administrative Override Justification (Mandatory)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={certOverrideReason}
+                                  onChange={(e) => setCertOverrideReason(e.target.value)}
+                                  placeholder="e.g. Consortium Executive Emergency Order Directive #2026-X"
+                                  className="w-full p-2 border border-amber-300 rounded bg-white text-slate-900 focus:ring-1 focus:ring-amber-500"
+                                  required
+                                />
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {certDecision === 'Approve' && (
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Regulatory Certification ID / Covenant Reference
+                            </label>
+                            <input
+                              type="text"
+                              value={certId}
+                              onChange={(e) => setCertId(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            {certDecision === 'Approve'
+                              ? 'Regulatory Findings & Review Notes'
+                              : certDecision === 'Needs Revision'
+                              ? 'Engineering Deficiencies & Revision Directives'
+                              : certDecision === 'Reject'
+                              ? 'Non-Compliance Findings & Rejection Grounds'
+                              : certDecision === 'Revoke'
+                              ? 'Statutory Safety Breach Grounds & Revocation Notice'
+                              : 'Corrective Actions Applied & Resubmission Justification'}
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={certNotes}
+                            onChange={(e) => setCertNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
 
@@ -1127,7 +1414,7 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
                   </>
                 )}
 
-                {/* 7. Disposal Form */}
+                {/* 7. Disposal Form: 5-Stage Controlled Decommissioning */}
                 {config.operationKey === 'disposal' && (
                   <>
                     <div>
@@ -1142,90 +1429,413 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
                       >
                         {awsRecords.map((r) => (
                           <option key={r.id} value={r.id}>
-                            {r.id} — Status: {r.lifecycleStatus} ({r.disposalStatus})
+                            {r.id} — Status: {r.lifecycleStatus} ({r.disposalStatus || 'Not Scheduled'})
                           </option>
                         ))}
                       </select>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Disposal Protocol Status
-                        </label>
-                        <select
-                          value={dispStatus}
-                          onChange={(e) => setDispStatus(e.target.value as any)}
-                          className="w-full p-2 border border-slate-300 rounded font-medium focus:ring-1 focus:ring-slate-900"
-                        >
-                          <option value="Decommissioned">Decommissioned (Permanent Zeroization)</option>
-                          <option value="Pending Disposal">Pending Disposal (Scheduled)</option>
-                        </select>
+                    {/* 5-Step Visual Decommissioning Tracker */}
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700">
+                        <span>5-Stage Decommissioning Lifecycle State Machine</span>
+                        <span className="text-slate-500 font-mono text-[10px]">
+                          Step {Math.min(disposalStageInfo?.stageStep || 1, 5)} of 5
+                        </span>
                       </div>
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Disposal Date
-                        </label>
-                        <input
-                          type="date"
-                          value={dispDate}
-                          onChange={(e) => setDispDate(e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Authorized By
-                        </label>
-                        <input
-                          type="text"
-                          value={dispBy}
-                          onChange={(e) => setDispBy(e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-700 font-bold mb-1">
-                          Disposal Reference ID
-                        </label>
-                        <input
-                          type="text"
-                          value={dispRef}
-                          onChange={(e) => setDispRef(e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
-                          required
-                        />
+                      <div className="grid grid-cols-5 gap-1.5 text-[10px]">
+                        {[
+                          { step: 1, name: '1. Request', role: 'Military' },
+                          { step: 2, name: '2. Gov Approval', role: 'Government' },
+                          { step: 3, name: '3. Compliance Audit', role: 'Auditor' },
+                          { step: 4, name: '4. Zeroization', role: 'Manufacturer' },
+                          { step: 5, name: '5. Record Closeout', role: 'Military' },
+                        ].map((s) => {
+                          const currentStep = disposalStageInfo?.stageStep || 1;
+                          const isCompleted = currentStep > s.step;
+                          const isCurrent = currentStep === s.step;
+                          return (
+                            <div
+                              key={s.step}
+                              className={`p-1.5 rounded border text-center transition-all ${
+                                isCompleted
+                                  ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                                  : isCurrent
+                                  ? 'bg-blue-50 border-blue-400 text-blue-900 font-bold ring-1 ring-blue-300'
+                                  : 'bg-white border-slate-200 text-slate-400'
+                              }`}
+                            >
+                              <div className="truncate">{s.name}</div>
+                              <div className="text-[8px] truncate mt-0.5 opacity-80">{s.role}</div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-slate-700 font-bold mb-1">
-                        Neutralization & Zeroization Confirmation Notes
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={dispNotes}
-                        onChange={(e) => setDispNotes(e.target.value)}
-                        className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
-                      />
-                    </div>
+                    {/* Eligibility / Pre-Condition Diagnostic Banner */}
+                    {disposalStageInfo && !disposalStageInfo.isEligible ? (
+                      <div className="p-3 bg-amber-50 border border-amber-300 rounded text-xs text-amber-900 space-y-1">
+                        <div className="flex items-center gap-2 font-semibold">
+                          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                          <span>Disposal Ineligible: {disposalStageInfo.reason}</span>
+                        </div>
+                        <p className="text-[11px] text-amber-800 leading-relaxed">
+                          Consortium regulatory policies dictate that weapon units cannot enter disposal while in active transit or unfinalized production.
+                        </p>
+                      </div>
+                    ) : disposalStageInfo ? (
+                      <div className="p-3 bg-blue-50 border border-blue-200 rounded text-xs text-blue-900 flex items-start gap-2">
+                        <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <div className="font-semibold">
+                            Active Step {disposalStageInfo.stageStep}: {disposalStageInfo.stageName}
+                          </div>
+                          <div className="text-[11px] text-blue-800">
+                            Mandated Role: <strong>{disposalStageInfo.responsibleRole}</strong>.
+                            {disposalStageInfo.canActorPerform ? (
+                              <span className="text-emerald-700 font-medium ml-1">✓ Your current role is authorized to execute this stage.</span>
+                            ) : (
+                              <span className="text-amber-800 font-medium ml-1">
+                                Your current role ('{userRole}') is not authorized for this stage. Switch roles or apply Administrator Override.
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Administrator Role Override Controls */}
+                    {userRole === 'Administrator' && (
+                      <div className="p-3 bg-amber-50 border border-amber-300 rounded space-y-2 text-xs text-amber-900">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            id="dispAdminOverride"
+                            checked={dispIsAdminOverride}
+                            onChange={(e) => setDispIsAdminOverride(e.target.checked)}
+                            className="rounded border-amber-400 text-slate-900 focus:ring-slate-900"
+                          />
+                          <label htmlFor="dispAdminOverride" className="font-semibold cursor-pointer">
+                            Apply Explicit Administrative Override
+                          </label>
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          Consortium Mandate: The Administrator cannot bypass statutory role authorities ({disposalStageInfo?.responsibleRole}) without explicit override flag and documented justification.
+                        </p>
+                        {dispIsAdminOverride && (
+                          <div>
+                            <label className="block font-semibold mb-1">
+                              Administrative Override Justification (Mandatory)
+                            </label>
+                            <input
+                              type="text"
+                              value={dispOverrideReason}
+                              onChange={(e) => setDispOverrideReason(e.target.value)}
+                              placeholder="e.g. Consortium Executive Emergency Order Directive #2026-X"
+                              className="w-full p-2 border border-amber-300 rounded bg-white text-slate-900 focus:ring-1 focus:ring-amber-500"
+                              required
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stage 1: Disposal Request (Military) */}
+                    {disposalStageInfo?.stageStep === 1 && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Disposal Request Reference ID
+                            </label>
+                            <input
+                              type="text"
+                              value={dispRef}
+                              onChange={(e) => setDispRef(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Request Date
+                            </label>
+                            <input
+                              type="date"
+                              value={dispDate}
+                              onChange={(e) => setDispDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Reason for Decommissioning Request
+                          </label>
+                          <input
+                            type="text"
+                            value={dispReason}
+                            onChange={(e) => setDispReason(e.target.value)}
+                            placeholder="e.g. End of service lifecycle / obsolescence / treaty reduction mandate"
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Target Demilitarization Facility / Depot
+                          </label>
+                          <input
+                            type="text"
+                            value={dispFacility}
+                            onChange={(e) => setDispFacility(e.target.value)}
+                            placeholder="e.g. Joint Decommissioning Complex Alpha, Nevada"
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Request Notes & Technical Appraisal
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={dispNotes}
+                            onChange={(e) => setDispNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            placeholder="Operational wear summary, maintenance history attestation..."
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Stage 2: Sovereign Government Approval (Government) */}
+                    {disposalStageInfo?.stageStep === 2 && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Sovereign Authorization Reference ID
+                            </label>
+                            <input
+                              type="text"
+                              value={dispRef}
+                              onChange={(e) => setDispRef(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Authorization Date
+                            </label>
+                            <input
+                              type="date"
+                              value={dispDate}
+                              onChange={(e) => setDispDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Designated Demilitarization Depot
+                          </label>
+                          <input
+                            type="text"
+                            value={dispFacility}
+                            onChange={(e) => setDispFacility(e.target.value)}
+                            placeholder="e.g. Sovereign Ordnance Neutralization Facility Sector 4"
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Sovereign Review & Statutory Approval Notes
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={dispNotes}
+                            onChange={(e) => setDispNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            placeholder="Validated against National Defense Authorization Covenant and Non-Proliferation Article 36..."
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Stage 3: Pre-Destruction Compliance Audit (Auditor) */}
+                    {disposalStageInfo?.stageStep === 3 && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Audit Compliance Docket Reference
+                            </label>
+                            <input
+                              type="text"
+                              value={dispRef}
+                              onChange={(e) => setDispRef(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Audit Inspection Date
+                            </label>
+                            <input
+                              type="date"
+                              value={dispDate}
+                              onChange={(e) => setDispDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Hardware Serial Verification & Pre-Destruction Inspection Notes
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={dispNotes}
+                            onChange={(e) => setDispNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            placeholder="Physical serial number match confirmed. Cryptographic HSM key destruction protocol verified. Radiation and payload zeroization confirmed..."
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Stage 4: Manufacturer Finalization & Hardware Zeroization (Manufacturer) */}
+                    {disposalStageInfo?.stageStep === 4 && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Zeroization & Dismantling Docket ID
+                            </label>
+                            <input
+                              type="text"
+                              value={dispRef}
+                              onChange={(e) => setDispRef(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Zeroization Execution Date
+                            </label>
+                            <input
+                              type="date"
+                              value={dispDate}
+                              onChange={(e) => setDispDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Executing Demilitarization / Dismantling Facility
+                          </label>
+                          <input
+                            type="text"
+                            value={dispFacility}
+                            onChange={(e) => setDispFacility(e.target.value)}
+                            placeholder="e.g. AeroDynamics Secure Neutralization Lab"
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Hardware Dismantling & Enclave Neutralization Certificate Notes
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={dispNotes}
+                            onChange={(e) => setDispNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            placeholder="Autonomous guidance modules physically incinerated. Firmware burned to irreversible state. Structural airframe demilitarized..."
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {/* Stage 5: Military Terminal Record Closeout (Military) */}
+                    {disposalStageInfo?.stageStep === 5 && (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Terminal Decommission Registry Reference
+                            </label>
+                            <input
+                              type="text"
+                              value={dispRef}
+                              onChange={(e) => setDispRef(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-slate-700 font-bold mb-1">
+                              Terminal Closeout Date
+                            </label>
+                            <input
+                              type="date"
+                              value={dispDate}
+                              onChange={(e) => setDispDate(e.target.value)}
+                              className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                              required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-700 font-bold mb-1">
+                            Terminal Record Update & Archive Attestation Notes
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={dispNotes}
+                            onChange={(e) => setDispNotes(e.target.value)}
+                            className="w-full p-2 border border-slate-300 rounded focus:ring-1 focus:ring-slate-900"
+                            placeholder="Defense inventory strike-off recorded. Asset transitioning into permanent Decommissioned state. Cryptographic record permanently locked..."
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
 
                 {/* Terminal State Warning Banner if the selected record is already disposed */}
-                {isSelectedRecordDisposed && config.operationKey !== 'disposal' && (
+                {isSelectedRecordDisposed && (
                   <div className="p-3 bg-rose-50 border border-rose-300 rounded text-xs text-rose-900 flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                     <div>
                       <strong className="font-semibold">Terminal Lifecycle State Lock</strong>
                       <p className="mt-0.5 text-[11px]">
                         Asset <strong>{selectedRecord?.id}</strong> is Decommissioned / Disposed.
-                        Further lifecycle operations are permanently blocked according to AWLM governance rules.
+                        Further lifecycle operations are permanently blocked according to AWLM consortium rules.
                       </p>
                     </div>
                   </div>
@@ -1235,16 +1845,34 @@ export const LifecycleOperationsPage: React.FC<LifecycleOperationsPageProps> = (
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={isSelectedRecordDisposed && config.operationKey !== 'disposal'}
+                    disabled={
+                      isSelectedRecordDisposed ||
+                      (config.operationKey === 'disposal' && (
+                        !disposalStageInfo?.isEligible ||
+                        (!disposalStageInfo?.canActorPerform && !(userRole === 'Administrator' && dispIsAdminOverride))
+                      ))
+                    }
                     className={`w-full py-2.5 px-4 rounded-md font-semibold text-xs transition-colors flex items-center justify-center gap-2 shadow-xs cursor-pointer ${
-                      isSelectedRecordDisposed && config.operationKey !== 'disposal'
+                      isSelectedRecordDisposed ||
+                      (config.operationKey === 'disposal' && (
+                        !disposalStageInfo?.isEligible ||
+                        (!disposalStageInfo?.canActorPerform && !(userRole === 'Administrator' && dispIsAdminOverride))
+                      ))
                         ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                         : 'bg-slate-900 hover:bg-slate-800 text-white'
                     }`}
                   >
                     <StageIcon className="w-4 h-4 text-blue-400" />
                     <span>
-                      {isSelectedRecordDisposed && config.operationKey !== 'disposal'
+                      {config.operationKey === 'disposal'
+                        ? isSelectedRecordDisposed
+                          ? 'Asset Permanently Disposed (Terminal State Lock)'
+                          : !disposalStageInfo?.isEligible
+                          ? `Disposal Ineligible (${disposalStageInfo?.reason || 'Invalid State'})`
+                          : !disposalStageInfo?.canActorPerform && !(userRole === 'Administrator' && dispIsAdminOverride)
+                          ? `Action Restricted to ${disposalStageInfo?.responsibleRole}`
+                          : `Submit Stage ${disposalStageInfo?.stageStep}: ${disposalStageInfo?.stageName}`
+                        : isSelectedRecordDisposed
                         ? 'Operation Blocked (Asset Disposed)'
                         : `Submit Verified ${config.stageName} Record`}
                     </span>

@@ -41,7 +41,7 @@ export const OPERATION_PERMISSIONS: Record<LifecycleOperation, UserRole[]> = {
   usage_tracking: ['Military / Defense', 'Administrator'],
   audit_compliance: ['Auditor / Inspector', 'Regulator', 'Administrator'],
   incident_reporting: ['Military / Defense', 'Auditor / Inspector', 'Regulator', 'Administrator'],
-  disposal: ['Military / Defense', 'Government', 'Regulator', 'Administrator'],
+  disposal: ['Military / Defense', 'Government', 'Auditor / Inspector', 'Manufacturer', 'Administrator'],
 };
 
 export function canPerformLifecycleOperation(role: UserRole, operation: LifecycleOperation): boolean {
@@ -60,6 +60,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'architecture',
     'consortium-stakeholders',
     'manufacturing-certification',
+    'disposal',
   ],
   'Supply Chain Operator': [
     'dashboard',

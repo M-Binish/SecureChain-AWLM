@@ -37,9 +37,17 @@ export interface LifecycleEvent {
   recordIdentifier: string; // Simulated digital record ID
   notes?: string;
   isConditional?: boolean; // For incident reporting
+  resultingState?: string;
+  nextResponsibleRole?: UserRole | 'None';
 }
 
-export type CertificationStatus = 'Certified' | 'Pending Review' | 'Expired' | 'Revoked' | 'Rejected';
+export type CertificationStatus =
+  | 'Certified'
+  | 'Pending Review'
+  | 'Needs Revision'
+  | 'Expired'
+  | 'Revoked'
+  | 'Rejected';
 
 export type OverallLifecycleStatus =
   | 'Manufacturing & Certification'
@@ -49,6 +57,15 @@ export type OverallLifecycleStatus =
   | 'Active Service'
   | 'Under Audit'
   | 'Incident Flagged'
+  | 'Pending Disposal'
+  | 'Decommissioned';
+
+export type DisposalStatus =
+  | 'Not Scheduled'
+  | 'Disposal Requested'
+  | 'Government Approved'
+  | 'Audit Compliant'
+  | 'Manufacturer Finalized'
   | 'Pending Disposal'
   | 'Decommissioned';
 
@@ -97,7 +114,16 @@ export interface AwsRecord {
   usageStatus: 'Active Service' | 'In Reserve' | 'Standby' | 'Decommissioned';
   auditStatus: AuditLifecycleStatus;
   incidentStatus: 'No Incidents' | 'Under Review' | 'Flagged';
-  disposalStatus: 'Not Scheduled' | 'Pending Disposal' | 'Decommissioned';
+  disposalStatus: DisposalStatus;
+  responsibleRole?: UserRole | 'None';
+  submissionNotes?: string;
+  rejectionReason?: string;
+  revisionNotes?: string;
+  disposalReason?: string;
+  disposalFacility?: string;
+  disposalAuthorizationRef?: string;
+  disposalAuditRef?: string;
+  disposalZeroizationRef?: string;
   createdTimestamp: string;
   lastUpdated: string;
   systemType: string;

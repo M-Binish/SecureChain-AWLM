@@ -130,14 +130,16 @@ export class ValidationService {
   }
 
   /**
-   * Validate Certification Review & Regulatory Signoff (Phase 5 Section 13 Requirements)
+   * Validate Certification Review & Regulatory Signoff (Phase 5 Section 12-15 Requirements)
    */
   public static validateCertificationReview(
     record: AwsRecord | null | undefined,
     payload: {
-      decision: 'Approve' | 'Reject' | 'Revoke' | 'Resubmit';
+      decision: 'Approve' | 'Reject' | 'Needs Revision' | 'Revoke' | 'Resubmit';
       certificationId?: string;
       notes?: string;
+      isAdministrativeOverride?: boolean;
+      overrideReason?: string;
     },
     actorRole: UserRole
   ): ValidationResult {
@@ -160,11 +162,11 @@ export class ValidationService {
       );
     }
 
-    // Resubmission workflow: Manufacturer or Administrator resubmits from Revoked/Rejected to Pending Review
+    // Resubmission workflow: Manufacturer resubmits from Needs Revision / Revoked / Rejected to Pending Review
     if (payload.decision === 'Resubmit') {
       if (actorRole !== 'Manufacturer' && actorRole !== 'Administrator') {
         return this.fail(
-          [`Unauthorized Submitter: Only 'Manufacturer' (or Administrator) can submit a re-certification request.`],
+          [`Unauthorized Submitter: Only 'Manufacturer' can submit a re-certification request for evaluation.`],
           {
             policyId: 'POLICY-CERT-001',
             violationType: 'Unauthorized Certification Resubmission',
@@ -173,21 +175,42 @@ export class ValidationService {
           }
         );
       }
-      if (record.certificationStatus !== 'Revoked' && record.certificationStatus !== 'Rejected') {
-        errors.push(`Invalid State: Only assets with 'Revoked' or 'Rejected' certification status can be resubmitted for review (current status is '${record.certificationStatus}').`);
+      if (
+        record.certificationStatus !== 'Revoked' &&
+        record.certificationStatus !== 'Rejected' &&
+        record.certificationStatus !== 'Needs Revision'
+      ) {
+        errors.push(`Invalid State: Only assets with 'Needs Revision', 'Rejected', or 'Revoked' status can be resubmitted for review (current status is '${record.certificationStatus}').`);
       }
       if (!payload.notes || !payload.notes.trim()) {
-        errors.push('Re-certification submission requires technical justification or corrective action notes.');
+        errors.push('Re-certification submission requires technical justification and corrective action notes.');
       }
       if (errors.length > 0) return this.fail(errors);
       return this.pass();
     }
 
-    // Regulatory review actions: Approve, Reject, Revoke
-    // Only Regulator or Administrator can approve, reject, or revoke certification
-    if (actorRole !== 'Regulator' && actorRole !== 'Administrator') {
+    // Section 12: Regulator is the NORMAL certification decision-maker.
+    // Do NOT silently make Administrator act as Regulator.
+    if (actorRole === 'Administrator') {
+      if (!payload.isAdministrativeOverride) {
+        return this.fail(
+          [`Role Authorization: Administrator cannot act as the statutory Regulator for certification reviews. If emergency intervention is required, it must be explicitly submitted as an 'Administrative Override' with documented justification.`],
+          {
+            policyId: 'POLICY-CERT-001',
+            violationType: 'Administrator Masquerading as Regulator',
+            description: `Administrator attempted normal regulatory signoff on ${record.id} without explicit Administrative Override justification.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (!payload.overrideReason || !payload.overrideReason.trim()) {
+        return this.fail(
+          ['Administrative Override requires a mandatory documented justification reason and audit note.']
+        );
+      }
+    } else if (actorRole !== 'Regulator') {
       return this.fail(
-        [`Unauthorized Authority: Role '${actorRole}' cannot approve, reject, or revoke certification. Only 'Regulator' (or Administrator) holds statutory regulatory certification authority.`],
+        [`Unauthorized Authority: Role '${actorRole}' cannot approve, reject, revise, or revoke certification. Only 'Regulator' holds statutory regulatory certification authority under consortium governance.`],
         {
           policyId: 'POLICY-CERT-001',
           violationType: 'Unauthorized Regulatory Certification Action',
@@ -198,14 +221,14 @@ export class ValidationService {
     }
 
     if (payload.decision === 'Approve') {
-      // Cannot approve directly from Revoked without resubmission to Pending Review
-      if (record.certificationStatus === 'Revoked') {
+      // Section 14: DO NOT allow Rejected -> Certified directly, or Revoked -> Certified directly
+      if (record.certificationStatus !== 'Pending Review') {
         return this.fail(
-          [`Invalid Certification Transition: Asset '${record.id}' has Revoked certification. Under consortium safety rules, revoked assets must be formally resubmitted by the Manufacturer to 'Pending Review' before they can be certified. Direct transition from Revoked to Certified is prohibited.`],
+          [`Invalid Certification Transition: Asset '${record.id}' has status '${record.certificationStatus}'. Direct transition from '${record.certificationStatus}' to Certified is prohibited. Assets must be submitted to 'Pending Review' before certification approval.`],
           {
             policyId: 'POLICY-CERT-001',
-            violationType: 'Illegal Revoked to Certified Transition',
-            description: `Attempted direct approval of Revoked certification on ${record.id} without required re-certification review process.`,
+            violationType: 'Illegal Certification Transition',
+            description: `Attempted direct approval of certification on ${record.id} without required 'Pending Review' status.`,
             severity: 'High',
           }
         );
@@ -213,6 +236,15 @@ export class ValidationService {
 
       if (!payload.certificationId || !payload.certificationId.trim()) {
         errors.push('Regulatory Certification ID / Covenant Reference is required for approval.');
+      }
+    }
+
+    if (payload.decision === 'Needs Revision') {
+      if (record.certificationStatus !== 'Pending Review') {
+        errors.push(`Invalid State: Only assets in 'Pending Review' can be flagged for revision.`);
+      }
+      if (!payload.notes || !payload.notes.trim()) {
+        errors.push('Requesting revision requires specific engineering or covenant compliance notes.');
       }
     }
 
@@ -587,15 +619,19 @@ export class ValidationService {
   }
 
   /**
-   * Validate Terminal Disposal / Decommissioning
+   * Validate Staged Disposal & Terminal Decommissioning (Section 18 & 19)
    */
   public static validateDisposal(
     record: AwsRecord | null | undefined,
     payload: {
+      stageStep?: 'request' | 'government_approval' | 'audit' | 'manufacturer_finalization' | 'military_record_update';
       disposalReference?: string;
       disposalDate?: string;
       facility?: string;
       reason?: string;
+      notes?: string;
+      isAdministrativeOverride?: boolean;
+      overrideReason?: string;
     },
     actorRole: UserRole
   ): ValidationResult {
@@ -605,44 +641,157 @@ export class ValidationService {
       return this.fail(['Asset Not Found: The specified AWS record does not exist.']);
     }
 
-    if (!canPerformLifecycleOperation(actorRole, 'disposal')) {
+    // Terminal State Lock
+    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
       return this.fail(
-        [`Unauthorized Officer: Role '${actorRole}' is not authorized to sign off on terminal decommissioning.`],
+        [`Asset Already Decommissioned: AWS '${record.id}' has already completed its terminal lifecycle decommissioning. Terminal records are permanently locked against further state transitions.`],
         {
           policyId: 'POLICY-DISPOSAL-001',
-          violationType: 'Unauthorized Disposal Signoff',
-          description: `Role '${actorRole}' attempted terminal disposal signoff on ${record.id}.`,
+          violationType: 'Redundant Disposal Attempt',
+          description: `Disposal action re-attempted on already decommissioned unit ${record.id}.`,
           severity: 'High',
         }
       );
     }
 
-    if (record.lifecycleStatus === 'Decommissioned' || record.disposalStatus === 'Decommissioned') {
+    // Section 19: Disposal Eligibility checks
+    if (
+      record.lifecycleStatus === 'Manufacturing & Certification' ||
+      record.certificationStatus === 'Pending Review' ||
+      record.certificationStatus === 'Needs Revision' ||
+      record.certificationStatus === 'Rejected'
+    ) {
       return this.fail(
-        [`Asset Already Decommissioned: AWS '${record.id}' has already completed its terminal lifecycle decommissioning.`],
+        [`Ineligible State: AWS '${record.id}' is currently in Manufacturing / Certification (${record.certificationStatus}). Assets with pending, revised, or rejected certification cannot receive disposal actions.`],
         {
           policyId: 'POLICY-DISPOSAL-001',
-          violationType: 'Redundant Disposal Attempt',
-          description: `Disposal signoff re-attempted on already decommissioned unit ${record.id}.`,
-          severity: 'Low',
+          violationType: 'Illegal Disposal on Ineligible Asset',
+          description: `Disposal action attempted on unit ${record.id} in non-eligible certification state '${record.certificationStatus}'.`,
+          severity: 'High',
         }
       );
     }
 
-    if (!payload.disposalReference || !payload.disposalReference.trim()) {
-      errors.push('Disposal Order / Decommissioning Authorization Reference is required.');
+    if (record.lifecycleStatus === 'In Transit') {
+      return this.fail(
+        [`Ineligible State: AWS '${record.id}' is currently In Transit under logistics custody. Chain of custody transfer must be finalized before scheduling decommissioning.`],
+        {
+          policyId: 'POLICY-DISPOSAL-001',
+          violationType: 'Disposal Attempt During Transit',
+          description: `Disposal attempted on in-transit unit ${record.id}.`,
+          severity: 'Medium',
+        }
+      );
     }
 
-    if (!payload.disposalDate) {
-      errors.push('Decommissioning Date is required.');
+    const step = payload.stageStep || 'request';
+
+    // Step 1: Military Initiates Disposal Request
+    if (step === 'request') {
+      if (actorRole !== 'Military / Defense' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Role: Only 'Military / Defense' can initiate an operational disposal request for AWS equipment.`],
+          {
+            policyId: 'POLICY-DISPOSAL-001',
+            violationType: 'Unauthorized Disposal Request',
+            description: `Role '${actorRole}' attempted to request disposal for ${record.id}.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (record.disposalStatus && record.disposalStatus !== 'Not Scheduled') {
+        return this.fail([`Asset '${record.id}' has already been submitted for disposal (current stage: '${record.disposalStatus}').`]);
+      }
+      if (!payload.reason || !payload.reason.trim()) {
+        errors.push('Operational decommissioning justification is required.');
+      }
+      if (!payload.facility || !payload.facility.trim()) {
+        errors.push('Target Demilitarization / Zeroization Facility is required.');
+      }
     }
 
-    if (!payload.facility || !payload.facility.trim()) {
-      errors.push('Designated Destruction / Disposal Facility is required.');
+    // Step 2: Government Evaluates & Approves Disposal Request
+    if (step === 'government_approval') {
+      if (actorRole !== 'Government' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Authority: Only 'Government' holds sovereign statutory authority to evaluate and approve disposal requests.`],
+          {
+            policyId: 'POLICY-DISPOSAL-001',
+            violationType: 'Unauthorized Disposal Approval',
+            description: `Role '${actorRole}' attempted sovereign disposal approval for ${record.id}.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (record.disposalStatus !== 'Disposal Requested') {
+        return this.fail([`Invalid Stage: Only units in 'Disposal Requested' status can be approved by Government (current status is '${record.disposalStatus}').`]);
+      }
+      if (!payload.disposalReference || !payload.disposalReference.trim()) {
+        errors.push('Sovereign Decommissioning Authorization Reference is required.');
+      }
     }
 
-    if (!payload.reason || !payload.reason.trim()) {
-      errors.push('Decommissioning Justification is required.');
+    // Step 3: Auditor Conducts Pre-Destruction Compliance Audit
+    if (step === 'audit') {
+      if (actorRole !== 'Auditor / Inspector' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Authority: Only 'Auditor / Inspector' can perform pre-destruction compliance verification.`],
+          {
+            policyId: 'POLICY-DISPOSAL-001',
+            violationType: 'Unauthorized Disposal Audit',
+            description: `Role '${actorRole}' attempted disposal audit for ${record.id}.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (record.disposalStatus !== 'Government Approved') {
+        return this.fail([`Invalid Stage: Pre-destruction audit requires previous 'Government Approved' status (current status is '${record.disposalStatus}').`]);
+      }
+      if (!payload.notes || !payload.notes.trim()) {
+        errors.push('Auditor verification notes and compliance attestations are required.');
+      }
+    }
+
+    // Step 4: Manufacturer Hardware Zeroization & Demilitarization Finalization
+    if (step === 'manufacturer_finalization') {
+      if (actorRole !== 'Manufacturer' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Authority: Only authorized 'Manufacturer' technical teams can finalize physical demilitarization and cryptographic zeroization.`],
+          {
+            policyId: 'POLICY-DISPOSAL-001',
+            violationType: 'Unauthorized Hardware Finalization',
+            description: `Role '${actorRole}' attempted hardware zeroization finalization for ${record.id}.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (record.disposalStatus !== 'Audit Compliant') {
+        return this.fail([`Invalid Stage: Physical demilitarization requires 'Audit Compliant' status from Inspector (current status is '${record.disposalStatus}').`]);
+      }
+      if (!payload.facility || !payload.facility.trim()) {
+        errors.push('Executing Destruction & Zeroization Facility is required.');
+      }
+    }
+
+    // Step 5: Military Record Update / Disposed
+    if (step === 'military_record_update') {
+      if (actorRole !== 'Military / Defense' && actorRole !== 'Administrator') {
+        return this.fail(
+          [`Unauthorized Role: Only 'Military / Defense' can register the terminal lifecycle record update.`],
+          {
+            policyId: 'POLICY-DISPOSAL-001',
+            violationType: 'Unauthorized Terminal Record Update',
+            description: `Role '${actorRole}' attempted terminal record closeout for ${record.id}.`,
+            severity: 'High',
+          }
+        );
+      }
+      if (record.disposalStatus !== 'Manufacturer Finalized') {
+        return this.fail([`Invalid Stage: Terminal decommission record update requires 'Manufacturer Finalized' completion (current status is '${record.disposalStatus}').`]);
+      }
+      if (!payload.disposalReference || !payload.disposalReference.trim()) {
+        errors.push('Terminal Decommission Record Identifier is required.');
+      }
     }
 
     if (errors.length > 0) {

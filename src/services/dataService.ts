@@ -28,6 +28,7 @@ import {
   CertificationStatus,
   OverallLifecycleStatus,
   AuditLifecycleStatus,
+  DisposalStatus,
 } from '../types';
 import {
   DEMO_AWS_RECORDS,
@@ -374,14 +375,16 @@ export const DataService = {
   },
 
   /**
-   * Review Certification & Safety Covenant Decision (Phase 5 Section 13 Requirements)
+   * Review Certification & Safety Covenant Decision (Phase 5 Section 12-15 Requirements)
    */
   reviewCertification(
     awsId: string,
     payload: {
-      decision: 'Approve' | 'Reject' | 'Revoke' | 'Resubmit';
+      decision: 'Approve' | 'Reject' | 'Needs Revision' | 'Revoke' | 'Resubmit';
       certificationId?: string;
       notes?: string;
+      isAdministrativeOverride?: boolean;
+      overrideReason?: string;
     },
     actorRole: UserRole,
     actorName: string
@@ -416,26 +419,38 @@ export const DataService = {
     let newLifecycleStatus = currentRecord.lifecycleStatus;
     let eventTitle: string;
     let eventDetails: string;
+    let nextRole: UserRole | 'None' = 'Regulator';
     const certId = payload.certificationId || currentRecord.certificationId;
 
     if (payload.decision === 'Approve') {
       newCertStatus = 'Certified';
       newLifecycleStatus = currentRecord.lifecycleStatus === 'Manufacturing & Certification' ? 'Certified' : currentRecord.lifecycleStatus;
-      eventTitle = 'Regulatory Safety Covenant: Approved & Certified';
-      eventDetails = `Statutory safety certification granted by ${actorName} (${actorRole}). Certification ID: ${certId}. Covenant attested.`;
+      eventTitle = payload.isAdministrativeOverride
+        ? 'Administrative Override: Safety Certification Approved'
+        : 'Regulatory Safety Covenant: Approved & Certified';
+      eventDetails = `${payload.isAdministrativeOverride ? 'Administrative override approved by ' : 'Statutory safety certification granted by '}${actorName} (${actorRole}). Certification ID: ${certId}. ${payload.overrideReason ? `Override Reason: ${payload.overrideReason}. ` : ''}Covenant attested.`;
+      nextRole = 'Supply Chain Operator';
     } else if (payload.decision === 'Reject') {
       newCertStatus = 'Rejected';
       eventTitle = 'Regulatory Safety Covenant: Rejected';
       eventDetails = `Certification submission rejected by ${actorName} (${actorRole}). Findings: ${payload.notes || 'Non-compliant with safety baseline standards.'}`;
+      nextRole = 'Manufacturer';
+    } else if (payload.decision === 'Needs Revision') {
+      newCertStatus = 'Needs Revision';
+      eventTitle = 'Regulatory Safety Covenant: Revision Requested';
+      eventDetails = `Regulatory review by ${actorName} (${actorRole}) requested revisions before covenant approval. Notes: ${payload.notes || 'Specification update required.'}`;
+      nextRole = 'Manufacturer';
     } else if (payload.decision === 'Revoke') {
       newCertStatus = 'Revoked';
       eventTitle = 'Regulatory Safety Covenant: Revoked';
       eventDetails = `Safety certification revoked by ${actorName} (${actorRole}). Grounds: ${payload.notes || 'Safety covenant non-compliance.'}`;
+      nextRole = 'Manufacturer';
     } else {
       // Resubmit
       newCertStatus = 'Pending Review';
       eventTitle = 'Safety Certification: Formal Re-Submission';
       eventDetails = `Manufacturer (${actorName}) resubmitted certification request for regulatory covenant review. Notes: ${payload.notes || 'Corrective measures applied.'}`;
+      nextRole = 'Regulator';
     }
 
     const newEvent: LifecycleEvent = {
@@ -447,8 +462,10 @@ export const DataService = {
       actorRole,
       status: payload.decision === 'Approve' ? 'Completed' : payload.decision === 'Reject' || payload.decision === 'Revoke' ? 'Flagged' : 'Pending',
       details: eventDetails,
-      recordIdentifier: `REC-CERT-${payload.decision.toUpperCase()}-${awsId.replace('AWS-', '')}`,
-      notes: payload.notes,
+      recordIdentifier: `REC-CERT-${payload.decision.toUpperCase().replace(/\s+/g, '-')}-${awsId.replace('AWS-', '')}`,
+      notes: payload.notes || payload.overrideReason,
+      resultingState: `Certification: ${newCertStatus} / Lifecycle: ${newLifecycleStatus}`,
+      nextResponsibleRole: nextRole,
     };
 
     const updatedRecord: AwsRecord = {
@@ -456,6 +473,10 @@ export const DataService = {
       certificationId: certId,
       certificationStatus: newCertStatus,
       lifecycleStatus: newLifecycleStatus,
+      responsibleRole: nextRole,
+      revisionNotes: payload.decision === 'Needs Revision' ? payload.notes : currentRecord.revisionNotes,
+      rejectionReason: payload.decision === 'Reject' ? payload.notes : currentRecord.rejectionReason,
+      submissionNotes: payload.decision === 'Resubmit' ? payload.notes : currentRecord.submissionNotes,
       lastUpdated: timestamp,
       lifecycleHistory: [...currentRecord.lifecycleHistory, newEvent],
     };
@@ -468,7 +489,7 @@ export const DataService = {
     const newTx: LifecycleTransaction = {
       id: generateId('TX-CERT-REV'),
       awsId,
-      operation: `Safety Certification Decision: ${payload.decision}`,
+      operation: `Safety Certification Decision: ${payload.decision}${payload.isAdministrativeOverride ? ' [ADMIN OVERRIDE]' : ''}`,
       stakeholder: actorName,
       stakeholderRole: actorRole,
       status: payload.decision === 'Approve' ? 'Completed' : payload.decision === 'Resubmit' ? 'Pending Review' : 'Flagged',
@@ -1027,19 +1048,20 @@ export const DataService = {
     return { success: true, record: updatedRecord };
   },
 
-  // =========================================================================
-  // 7. DISPOSAL (TERMINAL)
-  // =========================================================================
-  recordDisposal(
+  /**
+   * Execute Staged Disposal Lifecycle Step (Section 18 & 19 Requirements)
+   */
+  executeStagedDisposal(
     awsId: string,
     payload: {
-      disposalDate: string;
-      disposalStatus: 'Pending Disposal' | 'Decommissioned';
-      authorizedBy: string;
+      stageStep: 'request' | 'government_approval' | 'audit' | 'manufacturer_finalization' | 'military_record_update';
       disposalReference: string;
+      disposalDate?: string;
       facility?: string;
       reason?: string;
       notes?: string;
+      isAdministrativeOverride?: boolean;
+      overrideReason?: string;
     },
     actorRole: UserRole,
     actorName: string
@@ -1048,17 +1070,7 @@ export const DataService = {
     const index = db.awsRecords.findIndex((r) => r.id === awsId);
     const record = index !== -1 ? db.awsRecords[index] : null;
 
-    const validation = ValidationService.validateDisposal(
-      record,
-      {
-        disposalReference: payload.disposalReference,
-        disposalDate: payload.disposalDate,
-        facility: payload.facility || 'Demilitarization Facility Omega',
-        reason: payload.reason || payload.notes || 'End-of-life retirement',
-      },
-      actorRole
-    );
-
+    const validation = ValidationService.validateDisposal(record, payload, actorRole);
     if (!validation.isValid) {
       if (validation.violation) {
         this.logAutomatedViolation(
@@ -1079,45 +1091,92 @@ export const DataService = {
     }
 
     const timestamp = getTimestamp();
-    const isFinalDecommission = payload.disposalStatus === 'Decommissioned';
+    let newDisposalStatus: DisposalStatus = record.disposalStatus;
+    let newLifecycleStatus = record.lifecycleStatus;
+    let newUsageStatus = record.usageStatus;
+    let newDeploymentStatus = record.deploymentAuthorizationStatus;
+    let nextRole: UserRole | 'None' = 'None';
+    let eventTitle = '';
+    let eventDetails = '';
+    let isTerminal = false;
+
+    if (payload.stageStep === 'request') {
+      newDisposalStatus = 'Disposal Requested';
+      newLifecycleStatus = 'Pending Disposal';
+      nextRole = 'Government';
+      eventTitle = 'Disposal Stage 1: Disposal Request Initiated';
+      eventDetails = `Military disposal request filed by ${actorName} (${actorRole}). Reason: ${payload.reason || 'Operational retirement'}. Target Facility: ${payload.facility || 'Demilitarization Depot'}. Ref: ${payload.disposalReference}.`;
+    } else if (payload.stageStep === 'government_approval') {
+      newDisposalStatus = 'Government Approved';
+      nextRole = 'Auditor / Inspector';
+      eventTitle = 'Disposal Stage 2: Sovereign Decommissioning Approved';
+      eventDetails = `Government sovereign review completed by ${actorName} (${actorRole}). Authorization granted under statutory mandate. Ref: ${payload.disposalReference}. Target: ${record.disposalFacility || payload.facility || 'Demilitarization Depot'}.`;
+    } else if (payload.stageStep === 'audit') {
+      newDisposalStatus = 'Audit Compliant';
+      nextRole = 'Manufacturer';
+      eventTitle = 'Disposal Stage 3: Pre-Destruction Compliance Audit Passed';
+      eventDetails = `Pre-destruction audit completed by ${actorName} (${actorRole}). Hardware serial verified and weapon system payload verified ready for demilitarization. Ref: ${payload.disposalReference}.`;
+    } else if (payload.stageStep === 'manufacturer_finalization') {
+      newDisposalStatus = 'Manufacturer Finalized';
+      nextRole = 'Military / Defense';
+      eventTitle = 'Disposal Stage 4: Hardware Zeroization Finalized';
+      eventDetails = `Physical dismantling and cryptographic zeroization finalized by ${actorName} (${actorRole}) at facility: ${payload.facility || record.disposalFacility || 'Zeroization Center'}. Ref: ${payload.disposalReference}.`;
+    } else if (payload.stageStep === 'military_record_update') {
+      newDisposalStatus = 'Decommissioned';
+      newLifecycleStatus = 'Decommissioned';
+      newUsageStatus = 'Decommissioned';
+      newDeploymentStatus = 'Not Applicable';
+      nextRole = 'None';
+      isTerminal = true;
+      eventTitle = 'Disposal Stage 5: Terminal Lifecycle Record Closeout';
+      eventDetails = `Demilitarization verified. Permanent decommission record logged by ${actorName} (${actorRole}). Ref: ${payload.disposalReference}. Asset permanently locked from further operations.`;
+    }
 
     const newEvent: LifecycleEvent = {
       id: generateId('EVT-DISP'),
       stage: 'Disposal',
-      title: isFinalDecommission
-        ? 'Permanent Demilitarization & Zeroization'
-        : 'Decommissioning Order & Neutralization Notice',
+      title: eventTitle,
       timestamp,
-      actor: payload.authorizedBy || actorName,
+      actor: actorName,
       actorRole,
-      status: isFinalDecommission ? 'Completed' : 'Pending',
-      details: isFinalDecommission
-        ? `Demilitarization complete. Cryptographic root-of-trust zeroized. Ref: ${payload.disposalReference}. Digital record closed.`
-        : `Disposal order approved. Awaiting final demilitarization bench sign-off. Ref: ${payload.disposalReference}.`,
-      recordIdentifier: payload.disposalReference || `REC-DISP-${Date.now().toString().slice(-4)}`,
-      notes: payload.notes,
+      status: isTerminal ? 'Completed' : 'In Progress',
+      details: eventDetails,
+      recordIdentifier: payload.disposalReference,
+      notes: payload.notes || payload.reason,
+      resultingState: `Disposal: ${newDisposalStatus} / Lifecycle: ${newLifecycleStatus}`,
+      nextResponsibleRole: nextRole,
     };
 
     const updatedRecord: AwsRecord = {
       ...record,
-      disposalStatus: payload.disposalStatus,
-      lifecycleStatus: isFinalDecommission ? 'Decommissioned' : 'Pending Disposal',
-      usageStatus: isFinalDecommission ? 'Decommissioned' : 'Standby',
-      deploymentAuthorizationStatus: isFinalDecommission ? 'Not Applicable' : record.deploymentAuthorizationStatus,
+      disposalStatus: newDisposalStatus,
+      lifecycleStatus: newLifecycleStatus,
+      usageStatus: newUsageStatus,
+      deploymentAuthorizationStatus: newDeploymentStatus,
+      responsibleRole: nextRole,
+      disposalReason: payload.reason || record.disposalReason,
+      disposalFacility: payload.facility || record.disposalFacility,
+      disposalAuthorizationRef: payload.stageStep === 'government_approval' ? payload.disposalReference : record.disposalAuthorizationRef,
+      disposalAuditRef: payload.stageStep === 'audit' ? payload.disposalReference : record.disposalAuditRef,
+      disposalZeroizationRef: payload.stageStep === 'manufacturer_finalization' ? payload.disposalReference : record.disposalZeroizationRef,
       lastUpdated: timestamp,
       lifecycleHistory: [...record.lifecycleHistory, newEvent],
     };
 
-    const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
-    updatedRecord.complianceStatus = isFinalDecommission ? 'Decommissioned' : report.derivedStatus;
+    if (isTerminal) {
+      updatedRecord.complianceStatus = 'Decommissioned';
+    } else {
+      const report = PolicyEngine.evaluateAwsRecord(updatedRecord);
+      updatedRecord.complianceStatus = report.derivedStatus;
+    }
 
     const newTx: LifecycleTransaction = {
       id: generateId('TX-DISP'),
       awsId,
-      operation: isFinalDecommission ? 'Asset Decommissioned & Zeroized' : 'Disposal Protocol Initiated',
-      stakeholder: payload.authorizedBy || actorName,
+      operation: `Disposal Workflow: ${eventTitle}`,
+      stakeholder: actorName,
       stakeholderRole: actorRole,
-      status: isFinalDecommission ? 'Completed' : 'Pending Review',
+      status: isTerminal ? 'Completed' : 'Pending Review',
       timestamp,
       transactionRef: `LOG-TX-${Date.now().toString().slice(-6)}`,
     };
@@ -1127,5 +1186,37 @@ export const DataService = {
     saveDatabase(db);
 
     return { success: true, record: updatedRecord };
+  },
+
+  // =========================================================================
+  // 7. DISPOSAL (TERMINAL WRAPPER)
+  // =========================================================================
+  recordDisposal(
+    awsId: string,
+    payload: {
+      disposalDate: string;
+      disposalStatus: 'Pending Disposal' | 'Decommissioned';
+      authorizedBy: string;
+      disposalReference: string;
+      facility?: string;
+      reason?: string;
+      notes?: string;
+    },
+    actorRole: UserRole,
+    actorName: string
+  ): { success: boolean; record?: AwsRecord; error?: string } {
+    return this.executeStagedDisposal(
+      awsId,
+      {
+        stageStep: payload.disposalStatus === 'Decommissioned' ? 'military_record_update' : 'request',
+        disposalReference: payload.disposalReference,
+        disposalDate: payload.disposalDate,
+        facility: payload.facility,
+        reason: payload.reason,
+        notes: payload.notes,
+      },
+      actorRole,
+      actorName
+    );
   },
 };
